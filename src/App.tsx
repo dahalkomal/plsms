@@ -118,6 +118,18 @@ export default function App() {
     }
   });
 
+  useEffect(() => {
+    const handlePathChange = () => {
+      try {
+        setIsPlsmsPath(window.location.pathname.replace(/\/$/, '') === '/plsms');
+      } catch (e) {
+        setIsPlsmsPath(false);
+      }
+    };
+    window.addEventListener('popstate', handlePathChange);
+    return () => window.removeEventListener('popstate', handlePathChange);
+  }, []);
+
   // Logged-in staff display name and session states
   const [authStaffName, setAuthStaffName] = useState<string>('');
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
@@ -270,8 +282,14 @@ export default function App() {
     return currentRole || 'public';
   }, [currentUser, currentRole]);
 
-  const isStaff = currentUser !== null || effectiveRole === 'staff' || effectiveRole === 'admin' || effectiveRole === 'superuser';
-  const isAdmin = effectiveRole === 'admin' || effectiveRole === 'superuser';
+  const isStaff = isPlsmsPath && (currentUser !== null || effectiveRole === 'staff' || effectiveRole === 'admin' || effectiveRole === 'superuser');
+  const isAdmin = isStaff && (effectiveRole === 'admin' || effectiveRole === 'superuser');
+
+  useEffect(() => {
+    if (isPlsmsPath && isStaff && activeTab === 'search') {
+      setActiveTab('dashboard');
+    }
+  }, [isPlsmsPath, isStaff]);
 
   const theme = isStaff ? userTheme : 'light';
 
@@ -368,22 +386,6 @@ export default function App() {
             resolveUserRole(cachedUser);
             return;
           } catch (e) {}
-        }
-
-        // Enable Super Admin User Sign In / Log in automatically on editor deployment unless user clicked Log Out
-        if (!isDeliberateLogout) {
-          const defaultSuperUser: any = {
-            uid: 'Super_Admin',
-            email: 'dahalkomal@gmail.com',
-            displayName: 'Komal Dahal',
-            emailVerified: true
-          };
-          try {
-            localStorage.setItem('plsms_live_user', JSON.stringify(defaultSuperUser));
-          } catch (e) {}
-          setCurrentUser(defaultSuperUser);
-          resolveUserRole(defaultSuperUser);
-          return;
         }
 
         setCurrentUser(null);
