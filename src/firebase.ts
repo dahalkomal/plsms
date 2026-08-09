@@ -6,7 +6,7 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 
 export async function withFirestoreRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 300): Promise<T> {
@@ -285,8 +285,13 @@ export async function verifyAndReauthenticateSuperAdmin(email: string, pass: str
 // Connection helper
 export async function testConnection() {
   try {
-    await getDoc(doc(db, 'office_settings', 'settings'));
-  } catch (error) {
-    console.warn("Firestore connection check info:", error);
+    await getDocFromServer(doc(db, 'office_settings', 'settings'));
+  } catch (error: any) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn("Firestore offline notice: Please check your Firebase configuration or internet connection.", error);
+    } else {
+      console.warn("Firestore connection check info:", error);
+    }
   }
 }
+testConnection();
