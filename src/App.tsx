@@ -122,6 +122,13 @@ export default function App() {
     const handlePathChange = () => {
       try {
         setIsPlsmsPath(window.location.pathname.replace(/\/$/, '') === '/plsms');
+        const params = new URLSearchParams(window.location.search);
+        const tabParam = params.get('tab');
+        if (tabParam && ['search', 'notices', 'dashboard', 'reports', 'requests', 'settings'].includes(tabParam)) {
+          setActiveTab(tabParam as any);
+        } else {
+          setActiveTab('search');
+        }
       } catch (e) {
         setIsPlsmsPath(false);
       }
@@ -337,8 +344,14 @@ export default function App() {
   useEffect(() => {
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set('tab', activeTab);
-      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+      if (activeTab === 'search') {
+        url.searchParams.delete('tab');
+      } else {
+        url.searchParams.set('tab', activeTab);
+      }
+      const newSearch = url.searchParams.toString();
+      const newUrl = url.pathname + (newSearch ? `?${newSearch}` : '') + url.hash;
+      window.history.replaceState(null, '', newUrl);
     } catch (e) {
       console.warn("Failed to synchronize URL with activeTab", e);
     }
@@ -349,11 +362,17 @@ export default function App() {
     if (extraParams) {
       try {
         const url = new URL(window.location.href);
-        url.searchParams.set('tab', tab);
+        if (tab === 'search') {
+          url.searchParams.delete('tab');
+        } else {
+          url.searchParams.set('tab', tab);
+        }
         Object.entries(extraParams).forEach(([k, v]) => {
           url.searchParams.set(k, v);
         });
-        window.history.pushState({}, '', url.pathname + url.search + url.hash);
+        const newSearch = url.searchParams.toString();
+        const newUrl = url.pathname + (newSearch ? `?${newSearch}` : '') + url.hash;
+        window.history.pushState({}, '', newUrl);
       } catch (err) {
         console.warn("Failed to set extra query parameters", err);
       }
@@ -505,6 +524,11 @@ export default function App() {
     // Set expired alert state so we can show a gorgeous alert modal overlay
     setSessionExpiredNotice("Your session has expired due to 5 minutes of inactivity. Please login again.");
     
+    setIsPlsmsPath(false);
+    try {
+      window.history.pushState({}, '', '/');
+    } catch (e) {}
+
     if (isDemoModeActive()) {
       setCurrentUser(null);
       setCurrentRole('public');
@@ -767,6 +791,11 @@ export default function App() {
       setTempPasswordInput('');
       setNewPasswordInput('');
       setNewPasswordConfirmInput('');
+
+      setIsPlsmsPath(false);
+      try {
+        window.history.pushState({}, '', '/');
+      } catch (e) {}
 
       if (isDemoModeActive()) {
         setCurrentUser(null);
@@ -1606,11 +1635,11 @@ export default function App() {
                     theme === 'dark' ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-100/60 border-slate-200'
                   }`}>
                     <a
-                      href={`${window.location.origin}${window.location.pathname}?tab=search`}
+                      href={`${window.location.origin}${window.location.pathname}`}
                       draggable="true"
                       onDragStart={(e) => {
                         try {
-                          const fullUrl = `${window.location.origin}${window.location.pathname}?tab=search`;
+                          const fullUrl = `${window.location.origin}${window.location.pathname}`;
                           e.dataTransfer.setData("text/plain", fullUrl);
                           e.dataTransfer.setData("text/uri-list", fullUrl);
                         } catch (err) {
