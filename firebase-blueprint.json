@@ -1,0 +1,412 @@
+{
+  "entities": {
+    "OfficeSettings": {
+      "title": "OfficeSettings",
+      "description": "Configuration object holding the visual and contact details of the dynamic license office.",
+      "type": "object",
+      "properties": {
+        "officeName": {
+          "type": "string",
+          "description": "The name of the licensing office."
+        },
+        "officeAddress": {
+          "type": "string",
+          "description": "Physical address of the licensing office."
+        },
+        "officeLogo": {
+          "type": "string",
+          "description": "An image URL or standard graphical visual placeholder for the logo."
+        },
+        "contactNumber": {
+          "type": "string",
+          "description": "Main public telephone contact for office inquiries."
+        },
+        "emailAddress": {
+          "type": "string",
+          "description": "Primary public email identifier."
+        },
+        "websiteFooter": {
+          "type": "string",
+          "description": "Custom disclaimer and copyright statement at the base of the pages."
+        },
+        "homepageBanner": {
+          "type": "string",
+          "description": "Text banner to showcase prominently on the public homepage."
+        },
+        "searchMenuLabel": {
+          "type": "string",
+          "description": "Custom visual label for the search menu tab."
+        },
+        "requestMenuLabel": {
+          "type": "string",
+          "description": "Custom visual label for the requests menu tab."
+        },
+        "contactMenuLabel": {
+          "type": "string",
+          "description": "Custom visual label for the contact menu tab."
+        },
+        "noticesMenuLabel": {
+          "type": "string",
+          "description": "Custom visual label for the notices menu tab."
+        },
+        "consoleSecurityPin": {
+          "type": "string",
+          "description": "Custom administrative PIN for console panel authorization."
+        }
+      },
+      "required": [
+        "officeName",
+        "officeAddress"
+      ]
+    },
+    "License": {
+      "title": "License",
+      "description": "A driving license ledger record containing applicant detail and current status.",
+      "type": "object",
+      "properties": {
+        "applicantId": {
+          "type": "string",
+          "description": "Unique identifiers of applicants."
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Full name of the license holder."
+        },
+        "fatherHusbandName": {
+          "type": "string",
+          "description": "Father or husband name."
+        },
+        "licenseNumber": {
+          "type": "string",
+          "description": "Unique identifier of the driving license."
+        },
+        "category": {
+          "type": "string",
+          "description": "License vehicle categorization."
+        },
+        "officeVisitDay": {
+          "type": "string",
+          "description": "Allocated day of week or calendar date for citizens to collect."
+        },
+        "receivedBy": {
+          "type": "string",
+          "description": "Name of citizen/representative who physically withdrew the license."
+        },
+        "submittedDocs": {
+          "type": "array",
+          "description": "List of selected submitted documents recorded during distribution."
+        },
+        "submittedDocsOther": {
+          "type": "string",
+          "description": "Specified value if Other was selected as a submitted document."
+        },
+        "submittedDocsSavedBy": {
+          "type": "string",
+          "description": "Email of user who saved the submitted documents details."
+        },
+        "submittedDocsSavedDate": {
+          "type": "string",
+          "description": "Date and time when the submitted documents were first saved."
+        },
+        "submittedDocsUpdatedBy": {
+          "type": "string",
+          "description": "Email of user who last updated the submitted documents details."
+        },
+        "submittedDocsUpdatedDate": {
+          "type": "string",
+          "description": "Date and time when the submitted documents were last updated."
+        },
+        "submittedDocsResetBy": {
+          "type": "string",
+          "description": "Email of user who reset the submitted documents and receiver details."
+        },
+        "submittedDocsResetDate": {
+          "type": "string",
+          "description": "Date and time when the submitted documents and receiver details were reset."
+        },
+        "submittedDocsReceiverName": {
+          "type": "string",
+          "description": "Specific name of the receiver recorded with the submitted documents."
+        },
+        "recommendedStaffName": {
+          "type": "string",
+          "description": "Full name of the office staff member who recommended the card distribution."
+        },
+        "recommended_staff_name": {
+          "type": "string",
+          "description": "Full name of the office staff member who recommended the card distribution (alternate field/snake_case)."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "available",
+            "distributed",
+            "missing",
+            "found"
+          ],
+          "description": "Distribution operational state."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Datetime tracking when the ledger was edited."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Audit datetime tracking insertion."
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Staff email who committed the change."
+        },
+        "logs": {
+          "type": "array",
+          "description": "A list of tracking items detailing status alterations internally."
+        }
+      },
+      "required": [
+        "applicantId",
+        "fullName",
+        "fatherHusbandName",
+        "licenseNumber",
+        "status"
+      ]
+    },
+    "CollectionRequest": {
+      "title": "CollectionRequest",
+      "description": "Form submission from users declaring scheduling of pick-ups.",
+      "type": "object",
+      "properties": {
+        "licenseId": {
+          "type": "string",
+          "description": "Pointer to the corresponding license record."
+        },
+        "licenseHolderName": {
+          "type": "string",
+          "description": "Applicant's name printed on the record."
+        },
+        "licenseNumber": {
+          "type": "string",
+          "description": "Target driving license code."
+        },
+        "receiverName": {
+          "type": "string",
+          "description": "Declared name representing who is arriving."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Phone number contact of recipient."
+        },
+        "visitDay": {
+          "type": "string",
+          "description": "Target collection weekday selection."
+        },
+        "remarks": {
+          "type": "string",
+          "description": "Additional text input from citizen."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "completed",
+            "cancelled"
+          ],
+          "description": "Workflow phase of task."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Submission registry date."
+        }
+      },
+      "required": [
+        "licenseId",
+        "licenseHolderName",
+        "licenseNumber",
+        "receiverName",
+        "phoneNumber",
+        "visitDay",
+        "status"
+      ]
+    },
+    "Notice": {
+      "title": "Notice",
+      "description": "An announcement text published to citizens inside search layout.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Label of information tile."
+        },
+        "content": {
+          "type": "string",
+          "description": "Announcement context."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Publish timestamp."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "User email who posted announcement."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Visibility flag on homepage."
+        }
+      },
+      "required": [
+        "title",
+        "content",
+        "createdAt",
+        "active"
+      ]
+    },
+    "UserRole": {
+      "title": "UserRole",
+      "description": "A database record mapping specific user auth keys (usually emails or userIds) to operational authorization levels.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Identified staff workspace email."
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "superuser",
+            "admin",
+            "staff"
+          ],
+          "description": "Strategic capabilities of profile."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Change trace date."
+        }
+      },
+      "required": [
+        "email",
+        "role"
+      ]
+    },
+    "Statistic": {
+      "title": "Statistic",
+      "description": "System operational statistics ledger.",
+      "type": "object",
+      "properties": {
+        "totalSearchesServed": {
+          "type": "integer",
+          "description": "Global atomic counter recording system searches (not empty)."
+        }
+      },
+      "required": [
+        "totalSearchesServed"
+      ]
+    },
+    "UploadLedger": {
+      "title": "UploadLedger",
+      "description": "Bulk import session details and performance tracking statistics.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "uploader": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "fileName",
+        "status",
+        "uploader"
+      ]
+    },
+    "SecurityAuditLog": {
+      "title": "SecurityAuditLog",
+      "description": "Log entry documenting critical database reset successes and failures.",
+      "type": "object",
+      "properties": {
+        "timestamp": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "ipAddress": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "timestamp",
+        "username",
+        "ipAddress",
+        "status",
+        "reason"
+      ]
+    }
+  },
+  "firestore": {
+    "/office_settings/{settingsId}": {
+      "schema": "OfficeSettings",
+      "description": "DynDoc storing configurations of office visual settings."
+    },
+    "/licenses/{licenseId}": {
+      "schema": "License",
+      "description": "Primary repository containing prints driving licenses entries."
+    },
+    "/collection_requests/{requestId}": {
+      "schema": "CollectionRequest",
+      "description": "Registrations submitted from the public to schedule licensed retrievals."
+    },
+    "/notices/{noticeId}": {
+      "schema": "Notice",
+      "description": "Bulletins published by management for citizen viewing."
+    },
+    "/users_roles/{roleId}": {
+      "schema": "UserRole",
+      "description": "System list mapping registered credentials to operational roles (superuser, admin, staff)."
+    },
+    "/statistics/{statId}": {
+      "schema": "Statistic",
+      "description": "Counter doc tracking searches and statistics globally."
+    },
+    "/upload_ledgers/{ledgerId}": {
+      "schema": "UploadLedger",
+      "description": "Upload session summary meta logs."
+    },
+    "/upload_ledgers/{ledgerId}/records/{recordId}": {
+      "schema": "License",
+      "description": "Backup of original license records attached to a specific upload lot."
+    },
+    "/security_audit_logs/{logId}": {
+      "schema": "SecurityAuditLog",
+      "description": "Log records detailing database purge events."
+    }
+  }
+}

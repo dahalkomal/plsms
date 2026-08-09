@@ -1,0 +1,489 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+body.light {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Ensure menu banner titles (SEARCH, NOTICES, SMART CARD DASHBOARD, etc.) are very black in light theme */
+body.light .page-header-title,
+body.light h1.page-header-title {
+  color: #000000 !important;
+}
+
+/* ================= EXTREMELY PROFESSIONAL LIGHT MODE OVERRIDES ================= */
+
+/* 1. INPUTS, TEXTAREAS, SELECTS FOR LIGHT MODE */
+body.light input, 
+body.light textarea, 
+body.light select {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* 2. PLANNED HIGH-CONTRAST TEXT PLACEHOLDERS */
+body.light input::placeholder, 
+body.light textarea::placeholder,
+body.light .custom-rich-editor:empty::before {
+  color: #000000 !important; /* Very Black font color for placeholders */
+  font-weight: 700 !important; /* Bold */
+  opacity: 0.82 !important; /* Clearly readable and crisp */
+}
+
+/* 3. LIGHT THEME BUTTONS AND CONTROLS */
+
+/* Force cursor pointer, transition, high-contrast black border, and proper pointer effects on ALL light mode buttons */
+body.light button:not(.absolute):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="-none"]):not(.border-0):not(.stats-card) {
+  cursor: pointer !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important; /* Premium thick high-contrast solid Black border! */
+  font-weight: 850 !important; /* Extremely Bold */
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* Force standard/uncolored action buttons to have crisp black text and white background, while keeping colored ones matching */
+body.light button:not([class*="bg-cyan-"]):not([class*="bg-blue-"]):not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-slate-9"]):not([class*="bg-slate-8"]):not([class*="bg-slate-7"]):not([class*="bg-indigo-"]):not([class*="bg-gray-9"]):not([class*="bg-gray-8"]):not(.absolute):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="-none"]):not(.border-0):not(.stats-card) {
+  background-color: #ffffff !important; /* Beautiful pure white background */
+  color: #000000 !important; /* Very Black text */
+}
+
+/* Ensure colored background buttons preserve their beautifully matched colors under light theme while getting the black border and white text */
+body.light button[class*="bg-blue-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #2563eb !important; /* Sapphire blue */
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important;
+  cursor: pointer !important;
+}
+
+body.light button[class*="bg-cyan-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #0891b2 !important; /* Rich cyan */
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important;
+  cursor: pointer !important;
+}
+
+body.light button[class*="bg-emerald-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #86efac !important; /* Beautiful crisp light green (green-300 / emerald-300) */
+  color: #064e3b !important; /* Deep dark forest green text for high-contrast and readability */
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important; /* Bold high-contrast solid Black border */
+  cursor: pointer !important;
+}
+
+body.light button[class*="bg-amber-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #d97706 !important; /* Solid amber yellow */
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important;
+  cursor: pointer !important;
+}
+
+body.light button[class*="bg-red-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #dc2626 !important; /* Danger red */
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important;
+  cursor: pointer !important;
+}
+
+body.light button[class*="bg-indigo-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #4f46e5 !important; /* Vibrant Indigo */
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important;
+  cursor: pointer !important;
+}
+
+body.light button[class*="bg-slate-"]:not(.absolute):not(.bg-transparent):not(.stats-card) {
+  background-color: #475569 !important; /* Slate colors */
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #000000 !important;
+  cursor: pointer !important;
+}
+
+/* Ensure non-colored SVGs inside light buttons are very black, bold and well-defined */
+body.light button:not([class*="bg-cyan-"]):not([class*="bg-blue-"]):not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-slate-9"]):not([class*="bg-slate-8"]):not([class*="bg-slate-7"]):not([class*="bg-indigo-"]):not([class*="bg-gray-9"]):not([class*="bg-gray-8"]):not(.absolute):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="-none"]):not(.border-0) svg {
+  stroke: #000000 !important;
+  color: #000000 !important;
+  stroke-width: 2.75px !important; /* Extra crisp heavy lines */
+}
+
+/* Ensure icons inside light green/emerald buttons inside light theme are dark green and clearly defined */
+body.light button[class*="bg-emerald-"]:not(.absolute) svg {
+  stroke: #064e3b !important;
+  color: #064e3b !important;
+  stroke-width: 2.75px !important;
+}
+
+/* Ensure icons inside dark-background/colored buttons inside light theme are pure white and clearly defined */
+body.light button:is([class*="bg-cyan-"]):is([class*="bg-blue-"]):is([class*="bg-red-"]):is([class*="bg-slate-9"]):is([class*="bg-slate-8"]):is([class*="bg-indigo-"]):is([class*="bg-gray-9"]):not(.absolute) svg {
+  stroke: #ffffff !important;
+  color: #ffffff !important;
+  stroke-width: 2.75px !important;
+}
+
+/* Dynamic Hover and Active micro-interaction scaling strictly for ALL light mode action buttons */
+body.light button:not(.absolute):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="-none"]):not(.border-0):not(.stats-card):hover {
+  transform: translateY(-2px) scale(1.03) !important; /* Distinctive pointer animation feedback */
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.25) !important;
+  filter: brightness(1.08) !important;
+}
+
+body.light button:not(.absolute):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="-none"]):not(.border-0):not(.stats-card):active {
+  transform: translateY(1px) scale(0.96) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+  filter: brightness(0.92) !important;
+}
+
+/* Linked text rule: begins with http or https (excluding nav menu tabs) */
+body.light .break-words a:not([class*="rounded"]):not([href*="tab="]),
+body.light a[href^="http://"]:not([class*="rounded"]):not([href*="tab="]),
+body.light a[href^="https://"]:not([class*="rounded"]):not([href*="tab="]) {
+  color: #2563eb !important; /* Default blue color for light theme */
+  text-decoration: underline !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+}
+
+body.light .break-words a:not([class*="rounded"]):not([href*="tab="]):hover,
+body.light a[href^="http://"]:not([class*="rounded"]):not([href*="tab="]):hover,
+body.light a[href^="https://"]:not([class*="rounded"]):not([href*="tab="]):hover {
+  color: #1d4ed8 !important; /* Darker blue highlight on hover */
+}
+
+/* Explicit rule to remove underline effects of menus for Light theme mode only */
+body.light a[href*="tab="],
+body.light a[class*="rounded-"],
+body.light .rounded-xl a,
+body.light button[class*="rounded-"] {
+  text-decoration: none !important;
+}
+
+/* For buttons with dark backgrounds (excluding light green emerald): set font color very White (#ffffff) and Bold */
+body.light button:is([class*="bg-cyan-"]):is([class*="bg-blue-"]):is([class*="bg-red-"]):is([class*="bg-slate-9"]):is([class*="bg-slate-8"]):is([class*="bg-indigo-"]):is([class*="bg-gray-9"]):not(.absolute):not(.stats-card) {
+  color: #ffffff !important; /* Very White */
+  font-weight: 800 !important; /* Extremely Bold */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25) !important;
+}
+
+/* Ensure icons inside dark-background buttons are also pure white */
+body.light button:is([class*="bg-cyan-"]):is([class*="bg-blue-"]):is([class*="bg-red-"]):is([class*="bg-slate-9"]):is([class*="bg-slate-8"]):is([class*="bg-indigo-"]):is([class*="bg-gray-9"]):not(.absolute) svg {
+  stroke: #ffffff !important;
+  color: #ffffff !important;
+  stroke-width: 2.75px !important;
+}
+
+/* 4. DYNAMIC SELECTION HIGHLIGHTS (TABS / TOGGLES) FOR LIGHT THEME */
+
+/* Selected tab, option, or menu toggles in Light Mode: crisp solid slate-black background with bold white text */
+body.light .rounded-xl button[class*="bg-white"],
+body.light .rounded-xl a[class*="bg-white"],
+body.light div[class*="rounded-"] button[class*="bg-white"],
+body.light div[class*="rounded-"] a[class*="bg-white"],
+body.light button[class*="bg-white"].shadow-sm,
+body.light button[class*="bg-white"].shadow-xs,
+body.light button[class*="text-cyan-700"].bg-white,
+body.light a[class*="text-cyan-700"].bg-white {
+  background-color: #0f172a !important; /* Heavy professional dark slate-black color */
+  color: #ffffff !important; /* Very White text font */
+  font-weight: 900 !important; /* Extremely Bold */
+  border: 1.5px solid #0f172a !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 0 2px 4px -2px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Ensure selected tab SVGs are crisp pure white */
+body.light .rounded-xl button[class*="bg-white"] svg,
+body.light .rounded-xl a[class*="bg-white"] svg,
+body.light div[class*="rounded-"] button[class*="bg-white"] svg,
+body.light div[class*="rounded-"] a[class*="bg-white"] svg,
+body.light button[class*="bg-white"].shadow-sm svg,
+body.light button[class*="text-cyan-700"].bg-white svg,
+body.light a[class*="text-cyan-700"].bg-white svg {
+  stroke: #ffffff !important;
+  color: #ffffff !important;
+  stroke-width: 2.75px !important;
+}
+
+/* Unselected/inactive tabs, options, or menu toggles in Light Mode: transparent background with bold black text - NEVER matching color buttons */
+body.light .rounded-xl button:not([class*="bg-white"]):not([class*="bg-cyan-"]):not([class*="bg-blue-"]):not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-indigo-"]):not([class*="bg-slate-"]),
+body.light .rounded-xl a:not([class*="bg-white"]):not([class*="bg-cyan-"]):not([class*="bg-blue-"]):not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-indigo-"]):not([class*="bg-slate-"]),
+body.light div[class*="rounded-"] button:not([class*="bg-white"]):not([class*="bg-cyan-"]):not([class*="bg-blue-"]):not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-indigo-"]):not([class*="bg-slate-"]),
+body.light div[class*="rounded-"] a:not([class*="bg-white"]):not([class*="bg-cyan-"]):not([class*="bg-blue-"]):not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-indigo-"]):not([class*="bg-slate-"]) {
+  background-color: transparent !important; /* Blends cleanly with container background */
+  color: #000000 !important; /* Very Black */
+  font-weight: 800 !important; /* Bold */
+  border: 1.5px solid transparent !important; /* Prevent double borders */
+  box-shadow: none !important;
+}
+
+body.light .rounded-xl button:not([class*="bg-white"]) svg,
+body.light .rounded-xl a:not([class*="bg-white"]) svg,
+body.light div[class*="rounded-"] button:not([class*="bg-white"]) svg,
+body.light div[class*="rounded-"] a:not([class*="bg-white"]) svg {
+  stroke: #000000 !important;
+  color: #000000 !important;
+  stroke-width: 2.5px !important;
+}
+
+/* 5. EXCEPTIONS & CLEANUPS (E.G. ABSOLUTE TOGGLES, TRANSLUCENT INDICATORS) */
+
+/* Absolutely positioned, transparent, inline, and borderless buttons: REMOVE ALL BORDERS AND UNINTENDED BACKGROUNDS (Fixes password eye indicator "picture1") */
+body.light button.absolute,
+body.light button.bg-transparent,
+body.light button.border-transparent,
+body.light button.border-0 {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+body.light button.absolute svg {
+  stroke: #475569 !important; /* Elegant subtle dark gray eye */
+  color: #475569 !important;
+  stroke-width: 2px !important; /* Standard vector thickness */
+}
+
+/* Apply professional background elements for forms and panels in Light Mode */
+body.light .bg-slate-50, 
+body.light .bg-slate-100 {
+  background-color: #f1f5f9 !important;
+}
+
+body.light .bg-slate-100\/60 {
+  background-color: rgba(226, 232, 240, 0.8) !important;
+}
+
+body.dark {
+  background: radial-gradient(circle at top, #1e40af 0%, #0d1b30 100%);
+  background-attachment: fixed;
+  color: #f1f5f9;
+}
+
+/* Custom CSS-based text masking to bypass browser credential manager detection while keeping input experience premium */
+.secure-masked {
+  -webkit-text-security: disc !important;
+  text-security: disc !important;
+}
+
+/* Hide scrollbar globally for all browsers (No vertical scroll bars displayed, but natural scrolling is preserved) */
+::-webkit-scrollbar {
+  display: none !important;
+}
+
+html, body, * {
+  -ms-overflow-style: none !important;  /* IE and Edge */
+  scrollbar-width: none !important;  /* Firefox */
+}
+
+/* 🌌 Premium Luminous Radiant Blue Theme (Rich Sapphire, Cobalt & Royal Blue Harmony) */
+.dark {
+  /* Redefine Tailwind's system spacing backgrounds for dark mode classes with vibrant blues */
+  --color-slate-950: #0d1b30 !important; /* Elegant sapphire marine deep base */
+  --color-slate-900: #1a2f4c !important; /* Radiant vivid midnight blue for cards and panels */
+  --color-slate-850: #2a456c !important; /* Smooth royal blue border-lines */
+  --color-slate-800: #365582 !important; /* Beautiful clear blue dividers and dividers */
+  --color-slate-700: #4b6f9e !important; /* Glowing cobalt-toned indicators */
+  
+  --color-slate-500: #93b1d9 !important; /* Radiant description headings */
+  --color-slate-400: #b0ccf0 !important; /* Energetic bright sky text */
+  --color-slate-300: #dbebff !important; /* Gleaming blue-tinted paper text */
+  --color-slate-200: #f0f6ff !important; /* Soft premium white-blue highlights */
+  --color-slate-100: #ffffff !important; /* Maximum-contrast pure white labels */
+}
+
+/* Style input boxes correctly in beautiful radiant sapphire blue theme */
+.dark input, 
+.dark textarea, 
+.dark select {
+  background-color: #0d1b30 !important;
+  color: #ffffff !important;
+  border-color: #365582 !important;
+}
+
+.dark input::placeholder, 
+.dark textarea::placeholder {
+  color: #93b1d9 !important;
+}
+
+/* Map custom hardcoded background items into rich glowing sapphire coordinates */
+.dark .bg-\[\#0f172a\] {
+  background-color: #1a2f4c !important;
+}
+.dark .bg-\[\#0f172a\]\/50 {
+  background-color: rgba(26, 47, 76, 0.5) !important;
+}
+.dark .bg-\[\#070c15\]\/60 {
+  background-color: rgba(13, 27, 48, 0.6) !important;
+}
+.dark .bg-\[\#070c15\]\/30 {
+  background-color: rgba(13, 27, 48, 0.3) !important;
+}
+.dark .bg-\[\#0b0f19\] {
+  background-color: #0d1b30 !important;
+}
+
+/* ================= REGISTER TAB BUTTONS LIGHT THEME SPECIAL CUSTOMIZATION ================= */
+body.light .register-tab-btn {
+  border-bottom-width: 4px !important;
+  border-top-width: 0px !important;
+  border-left-width: 0px !important;
+  border-right-width: 0px !important;
+  border-radius: 12px 12px 0 0 !important;
+  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transform: none !important;
+  box-shadow: none !important;
+  font-weight: 700 !important;
+  background-color: transparent !important;
+}
+
+/* 1. NOT-DISTRIBUTED CARDS (not_distributed) */
+body.light #register-tab-not_distributed {
+  border-color: transparent !important;
+  color: #475569 !important; /* slate-600 */
+}
+body.light #register-tab-not_distributed:hover {
+  border-color: #10b981 !important; /* emerald-500 bold underline */
+  color: #047857 !important; /* emerald-700 */
+  font-weight: 900 !important; /* Extremely Bold */
+}
+body.light #register-tab-not_distributed.active-tab {
+  background-color: #d1fae5 !important; /* emerald-100 background */
+  color: #064e3b !important; /* emerald-950 text */
+  border-color: #10b981 !important; /* emerald-500 bold underline */
+  font-weight: 900 !important;
+}
+
+/* 2. DISTRIBUTED CARDS (distributed) */
+body.light #register-tab-distributed {
+  border-color: transparent !important;
+  color: #475569 !important;
+}
+body.light #register-tab-distributed:hover {
+  border-color: #8b5cf6 !important; /* purple-500 bold underline */
+  color: #6d28d9 !important; /* purple-700 */
+  font-weight: 900 !important;
+}
+body.light #register-tab-distributed.active-tab {
+  background-color: #f3e8ff !important; /* purple-100 background */
+  color: #3b0764 !important; /* purple-950 text */
+  border-color: #8b5cf6 !important; /* purple-500 bold underline */
+  font-weight: 900 !important;
+}
+
+/* 3. TOTAL SMART CARDS (available) */
+body.light #register-tab-available {
+  border-color: transparent !important;
+  color: #475569 !important;
+}
+body.light #register-tab-available:hover {
+  border-color: #3b82f6 !important; /* blue-500 bold underline */
+  color: #1d4ed8 !important; /* blue-700 */
+  font-weight: 900 !important;
+}
+body.light #register-tab-available.active-tab {
+  background-color: #dbeafe !important; /* blue-100 background */
+  color: #172554 !important; /* blue-950 text */
+  border-color: #3b82f6 !important; /* blue-500 bold underline */
+  font-weight: 900 !important;
+}
+
+/* 4. MISSING CARDS (missing) */
+body.light #register-tab-missing {
+  border-color: transparent !important;
+  color: #475569 !important;
+}
+body.light #register-tab-missing:hover {
+  border-color: #f43f5e !important; /* rose-500 bold underline */
+  color: #be123c !important; /* rose-700 */
+  font-weight: 900 !important;
+}
+body.light #register-tab-missing.active-tab {
+  background-color: #ffe4e6 !important; /* rose-100 background */
+  color: #4c0519 !important; /* rose-950 text */
+  border-color: #f43f5e !important; /* rose-500 bold underline */
+  font-weight: 900 !important;
+}
+
+/* 5. FOUND CARDS (found) */
+body.light #register-tab-found {
+  border-color: transparent !important;
+  color: #475569 !important;
+}
+body.light #register-tab-found:hover {
+  border-color: #06b6d4 !important; /* cyan-500 bold underline */
+  color: #0e7490 !important; /* cyan-700 */
+  font-weight: 900 !important;
+}
+body.light #register-tab-found.active-tab {
+  background-color: #ecfeff !important; /* cyan-100 background */
+  color: #083344 !important; /* cyan-950 text */
+  border-color: #06b6d4 !important; /* cyan-500 bold underline */
+  font-weight: 900 !important;
+}
+
+/* Count badges polish inside active tabs in light theme */
+body.light #register-tab-not_distributed.active-tab span {
+  background-color: #a7f3d0 !important;
+  color: #064e3b !important;
+  border-color: #34d399 !important;
+}
+body.light #register-tab-distributed.active-tab span {
+  background-color: #e9d5ff !important;
+  color: #3b0764 !important;
+  border-color: #c084fc !important;
+}
+body.light #register-tab-available.active-tab span {
+  background-color: #bfdbfe !important;
+  color: #172554 !important;
+  border-color: #60a5fa !important;
+}
+body.light #register-tab-missing.active-tab span {
+  background-color: #fecdd3 !important;
+  color: #4c0519 !important;
+  border-color: #f43f5e !important;
+}
+body.light #register-tab-found.active-tab span {
+  background-color: #cffafe !important;
+  color: #083344 !important;
+  border-color: #22d3ee !important;
+}
+
+/* Dedicated Print Formatting for Alphabetical Report & PDF Export */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #alphabetical-print-report,
+  #alphabetical-print-report * {
+    visibility: visible;
+  }
+  #alphabetical-print-report {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 16px 24px !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}
