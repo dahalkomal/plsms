@@ -370,7 +370,7 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
     let updated = 0;
     const errorsList: string[] = [];
     
-    const staffEmail = auth.currentUser?.email || 'admin@plsms.gov';
+    const staffEmail = auth.currentUser?.email || 'dahalkomal@gmail.com';
     const totalRecords = data.length;
     const now = new Date();
     const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });

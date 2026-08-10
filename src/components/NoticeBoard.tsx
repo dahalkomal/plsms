@@ -618,7 +618,7 @@ export default function NoticeBoard({
     setFormLoading(true);
     setError(null);
     try {
-      const email = auth.currentUser?.email || 'admin@plsms.gov.bd';
+      const email = auth.currentUser?.email || 'dahalkomal@gmail.com';
       const name = currentUserDisplayName || auth.currentUser?.displayName || resolveCreatorName(email);
       const newNotice = {
         title: title.trim(),

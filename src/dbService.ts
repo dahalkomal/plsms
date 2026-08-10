@@ -1598,7 +1598,7 @@ export const UNUSED_STAFF_ACCOUNTS_TO_PURGE = [
   'Sdahal_plsms', 'sdahal_plsms', 'SDAHAL_PLSMS', 'sdahal_plsms@plsms.local', 'sdahal_plsms@plsms.gov.bd',
   'dahal_plsms', 'Dahal_plsms', 'DAHAL_PLSMS', 'dahal_plsms@plsms.gov.bd',
   'public_handover_desk', 'Public_Handover_Desk', 'PUBLIC_HANDOVER_DESK', 'public_handover_desk@plsms.gov.bd', 'public search handover desk',
-  'admin_lead', 'ADMIN_LEAD', 'admin@tmodl.gov.np',
+  'admin_lead', 'ADMIN_LEAD', 'admin@tmodl.gov.np', 'admin@plsms.gov.bd', 'dahakomal@plsms.gov.bd', 'admin', 'ADMIN',
   'data_entry_staff', 'DATA_ENTRY_STAFF', 'dataentry@tmodl.gov.np',
   'dispatch_staff', 'DISPATCH_STAFF', 'dispatch@tmodl.gov.np',
   'staff_operator', 'STAFF_OPERATOR', 'staff@tmodl.gov.np',
@@ -1638,14 +1638,18 @@ export function isUserRevoked(u: { id: string; username?: string; email?: string
     idLower === 'dahal_plsms' || 
     idLower === 'sdahal_plsms' || 
     idLower === 'public_handover_desk' ||
+    idLower === 'admin_lead' ||
     usernameLower === 'dahal_plsms' ||
     usernameLower === 'sdahal_plsms' ||
     usernameLower === 'public_handover_desk' ||
+    usernameLower === 'admin_lead' ||
     emailLower === 'dahal_plsms@plsms.gov.bd' ||
     emailLower === 'sdahal_plsms@plsms.local' ||
     emailLower === 'sdahal_plsms@plsms.gov.bd' ||
     emailLower === 'public_handover_desk@plsms.gov.bd' ||
     emailLower === 'public search handover desk' ||
+    emailLower === 'admin@plsms.gov.bd' ||
+    emailLower === 'dahakomal@plsms.gov.bd' ||
     (idLower === 'super_admin' && emailLower.includes('tmodl.gov.np')) || 
     emailLower === 'superadmin_role6@tmodl.gov.np'
   ) {
@@ -1749,7 +1753,7 @@ export async function cleanupUnusedStaffAccounts(): Promise<void> {
     'dahal_plsms', 'DAHAL_PLSMS', 'Dahal_plsms',
     'sdahal_plsms', 'SDAHAL_PLSMS', 'Sdahal_plsms',
     'public_handover_desk', 'PUBLIC_HANDOVER_DESK', 'Public_Handover_Desk',
-    'admin_lead', 'ADMIN_LEAD', 
+    'admin_lead', 'ADMIN_LEAD', 'admin', 'ADMIN',
     'staff_operator', 'STAFF_OPERATOR', 
     'dispatch_staff', 'DISPATCH_STAFF', 
     'data_entry_staff', 'DATA_ENTRY_STAFF', 
@@ -1762,6 +1766,8 @@ export async function cleanupUnusedStaffAccounts(): Promise<void> {
     'sdahal_plsms@plsms.gov.bd', 
     'public_handover_desk@plsms.gov.bd', 
     'public search handover desk',
+    'admin@plsms.gov.bd',
+    'dahakomal@plsms.gov.bd',
     'admin@tmodl.gov.np', 
     'staff@tmodl.gov.np', 
     'dispatch@tmodl.gov.np', 

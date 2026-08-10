@@ -135,7 +135,7 @@ function resolveStaffName(identifier: any, userRolesList: any[] = []): string {
   const emailLower = cleanId.toLowerCase();
 
   // Known static fallback profiles for core staff emails
-  if (emailLower === 'dahalkomal@gmail.com' || emailLower === 'dahakomal@plsms.gov.bd' || emailLower === 'komaldahal@gmail.com') {
+  if (emailLower === 'dahalkomal@gmail.com' || emailLower === 'komaldahal@gmail.com') {
     return 'KOMAL DAHAL';
   }
   if (emailLower === 'dahalutkrishta@gmail.com') return 'UTKRISHTA DAHAL';

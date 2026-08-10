@@ -285,10 +285,12 @@ export async function verifyAndReauthenticateSuperAdmin(email: string, pass: str
 // Connection helper
 export async function testConnection() {
   try {
-    await getDocFromServer(doc(db, 'office_settings', 'settings'));
+    await getDoc(doc(db, 'office_settings', 'settings'));
   } catch (error: any) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firestore offline notice: Please check your Firebase configuration or internet connection.", error);
+    const errCode = String(error?.code || '').toLowerCase();
+    const errMsg = String(error?.message || error || '').toLowerCase();
+    if (errCode.includes('unavailable') || errMsg.includes('could not reach cloud firestore') || errMsg.includes('offline')) {
+      console.warn("Firestore offline/connecting notice: Operating in cached/offline mode.");
     } else {
       console.warn("Firestore connection check info:", error);
     }

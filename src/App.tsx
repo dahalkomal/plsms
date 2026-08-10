@@ -820,12 +820,12 @@ export default function App() {
     setSignInError(null);
     try {
       if (isDemoModeActive()) {
-        // Instant simulated Google login with admin privileges as fallback
-        const mockUser = { uid: 'demo-admin-uid', email: 'admin@plsms.gov.bd', displayName: 'Google Sandbox Admin' };
+        // Instant simulated Google login with superuser privileges as fallback
+        const mockUser = { uid: 'Super_Admin', email: 'dahalkomal@gmail.com', displayName: 'Komal Dahal' };
         localStorage.setItem('plsms_mock_user', JSON.stringify(mockUser));
-        localStorage.setItem('plsms_mock_user_role', 'admin');
+        localStorage.setItem('plsms_mock_user_role', 'superuser');
         setCurrentUser(mockUser as any);
-        setCurrentRole('admin');
+        setCurrentRole('superuser');
         setIsSignInModalOpen(false);
         if (activeTab === 'search') {
           setActiveTab('dashboard');
@@ -897,8 +897,6 @@ export default function App() {
       const emailLower = (u.email || '').toLowerCase();
       if (emailLower === 'dahalkomal@gmail.com') {
         usernameStr = 'superadmin';
-      } else if (emailLower === 'dahakomal@plsms.gov.bd') {
-        usernameStr = 'admin';
       } else if (emailLower.includes('@')) {
         usernameStr = emailLower.split('@')[0];
       } else {

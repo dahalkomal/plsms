@@ -2889,8 +2889,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                           currentUserEmail.toLowerCase().includes('admin') || 
                           currentUserEmail.toLowerCase().includes('super') ||
                           currentUserEmail.toLowerCase() === 'dahalkomal@gmail.com' ||
-                          currentUserEmail.toLowerCase() === 'dahalutkrishta@gmail.com' ||
-                          currentUserEmail.toLowerCase() === 'admin@plsms.gov.bd'
+                          currentUserEmail.toLowerCase() === 'dahalutkrishta@gmail.com'
                         ));
 
                       let finalUsersList = sortedUsersList;
