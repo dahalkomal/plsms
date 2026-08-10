@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { handleResetProductionData, handleResetStatus } from './server/adminReset.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,10 +11,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 
+app.disable('x-powered-by');
+app.use(express.json());
+
+// API Endpoints for Controlled Enterprise Reset
+app.post('/api/admin/reset-production-data', handleResetProductionData);
+app.get('/api/admin/reset-status', handleResetStatus);
+
 const distPath = path.join(__dirname, 'dist');
 const assetsPath = path.join(distPath, 'assets');
-
-app.disable('x-powered-by');
 
 // 1. Dedicated static route for compiled Vite /assets directory
 // Setting fallthrough: false guarantees missing assets return 404 instead of returning index.html

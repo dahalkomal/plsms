@@ -2713,85 +2713,175 @@ export async function purgeAllDatabaseRecordsAndLedgers(
     console.warn("Error cleaning local storage during purge:", e);
   }
 
+  // ==================== 1. SERVER-SIDE ENTERPRISE RESET ATTEMPT ====================
+  try {
+    const idToken = await auth.currentUser?.getIdToken(true);
+    if (idToken) {
+      updateProgress('Connecting to server-side enterprise reset engine...');
+      const initiateRes = await fetch('/api/admin/reset-production-data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          confirmationText: 'RESET PLSMS PRODUCTION DATA',
+          confirmChecked: true,
+          userEmail: auth.currentUser?.email || ''
+        })
+      });
+
+      if (initiateRes.ok || initiateRes.status === 409) {
+        // Server task accepted and is running. Begin real-time status polling.
+        while (true) {
+          await new Promise(resolve => setTimeout(resolve, 800));
+          const statusRes = await fetch('/api/admin/reset-status');
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            const s = statusData.status;
+            if (s) {
+              if (onProgress) {
+                onProgress({
+                  stage: s.stage,
+                  licensesDeleted: s.licensesDeleted,
+                  ledgersDeleted: s.ledgersDeleted,
+                  subcollectionsDeleted: s.subcollectionsDeleted,
+                  requestsDeleted: s.requestsDeleted,
+                  totalDeleted: s.totalDeleted
+                });
+              }
+
+              if (s.completed || (!s.isRunning && s.stage !== 'Idle')) {
+                return {
+                  totalDeleted: s.totalDeleted,
+                  verified: s.verified,
+                  error: s.error || undefined
+                };
+              }
+            }
+          }
+        }
+      } else if (initiateRes.status === 403 || initiateRes.status === 400) {
+        const errJson = await initiateRes.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Server authorization denied production reset.');
+      }
+    }
+  } catch (serverErr: any) {
+    if (serverErr.message && (serverErr.message.includes('Permission Denied') || serverErr.message.includes('Invalid confirmation') || serverErr.message.includes('authorization'))) {
+      throw serverErr;
+    }
+    console.warn("[RESET DRIVER] Server-side reset endpoint unavailable or falling back to client engine:", serverErr.message);
+  }
+
+  // ==================== 2. CLIENT-SIDE FALLBACK ENGINE ====================
   const { writeBatch, query, collection, limit, getDocs, deleteDoc, getCountFromServer, doc, setDoc } = await import('firebase/firestore');
 
-  // 1. Delete all license records in bounded batches (chunk size 400 to prevent high memory usage)
+  // 1. Delete all license records with high concurrency
   updateProgress('Deleting license records from Firestore...');
   const licensesCol = collection(db, 'licenses');
   while (true) {
-    const snap = await getDocs(query(licensesCol, limit(400)));
+    const snap = await getDocs(query(licensesCol, limit(2000)));
     if (snap.empty) break;
 
-    const batch = writeBatch(db);
-    for (const docSnap of snap.docs) {
-      batch.delete(docSnap.ref);
-    }
-    await batch.commit();
+    const docs = snap.docs;
+    const batchPromises: Promise<any>[] = [];
+    const BATCH_SIZE = 500;
 
-    licensesDeleted += snap.docs.length;
+    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+      const chunk = docs.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      for (const docSnap of chunk) {
+        batch.delete(docSnap.ref);
+      }
+      batchPromises.push(batch.commit());
+    }
+
+    await Promise.all(batchPromises);
+
+    licensesDeleted += docs.length;
     updateProgress(`Deleting license records (${licensesDeleted.toLocaleString()} deleted)...`);
 
-    if (snap.docs.length < 400) break;
+    if (docs.length < 2000) break;
   }
 
-  // 2. Delete upload ledgers and their subcollection records/checkpoints in bounded batches
+  // 2. Delete upload ledgers and their subcollection records/checkpoints
   updateProgress('Deleting upload history ledgers and metadata...');
   const ledgersCol = collection(db, 'upload_ledgers');
   while (true) {
-    const ledgersSnap = await getDocs(query(ledgersCol, limit(50)));
+    const ledgersSnap = await getDocs(query(ledgersCol, limit(100)));
     if (ledgersSnap.empty) break;
 
     for (const ledgerDoc of ledgersSnap.docs) {
       // Subcollection 'records'
       const recordsCol = collection(db, 'upload_ledgers', ledgerDoc.id, 'records');
       while (true) {
-        const recSnap = await getDocs(query(recordsCol, limit(400)));
+        const recSnap = await getDocs(query(recordsCol, limit(2000)));
         if (recSnap.empty) break;
-        const b = writeBatch(db);
-        recSnap.docs.forEach(d => b.delete(d.ref));
-        await b.commit();
-        subcollectionsDeleted += recSnap.docs.length;
-        if (recSnap.docs.length < 400) break;
+
+        const docs = recSnap.docs;
+        const promises: Promise<any>[] = [];
+        for (let i = 0; i < docs.length; i += 500) {
+          const chunk = docs.slice(i, i + 500);
+          const b = writeBatch(db);
+          chunk.forEach(d => b.delete(d.ref));
+          promises.push(b.commit());
+        }
+        await Promise.all(promises);
+
+        subcollectionsDeleted += docs.length;
+        if (docs.length < 2000) break;
       }
 
       // Subcollection 'checkpoints'
       const checkCol = collection(db, 'upload_ledgers', ledgerDoc.id, 'checkpoints');
       while (true) {
-        const chkSnap = await getDocs(query(checkCol, limit(400)));
+        const chkSnap = await getDocs(query(checkCol, limit(2000)));
         if (chkSnap.empty) break;
-        const b = writeBatch(db);
-        chkSnap.docs.forEach(d => b.delete(d.ref));
-        await b.commit();
-        subcollectionsDeleted += chkSnap.docs.length;
-        if (chkSnap.docs.length < 400) break;
+
+        const docs = chkSnap.docs;
+        const promises: Promise<any>[] = [];
+        for (let i = 0; i < docs.length; i += 500) {
+          const chunk = docs.slice(i, i + 500);
+          const b = writeBatch(db);
+          chunk.forEach(d => b.delete(d.ref));
+          promises.push(b.commit());
+        }
+        await Promise.all(promises);
+
+        subcollectionsDeleted += docs.length;
+        if (docs.length < 2000) break;
       }
 
       // Delete ledger document itself
       await deleteDoc(ledgerDoc.ref);
       ledgersDeleted++;
-      updateProgress(`Deleting upload ledgers (${ledgersDeleted} ledgers, ${subcollectionsDeleted} sub-records deleted)...`);
+      updateProgress(`Deleting upload ledgers (${ledgersDeleted} ledgers, ${subcollectionsDeleted.toLocaleString()} sub-records deleted)...`);
     }
 
-    if (ledgersSnap.docs.length < 50) break;
+    if (ledgersSnap.docs.length < 100) break;
   }
 
   // 3. Delete card collection requests
   updateProgress('Deleting card collection requests...');
   const requestsCol = collection(db, 'collection_requests');
   while (true) {
-    const reqSnap = await getDocs(query(requestsCol, limit(400)));
+    const reqSnap = await getDocs(query(requestsCol, limit(2000)));
     if (reqSnap.empty) break;
 
-    const batch = writeBatch(db);
-    for (const docSnap of reqSnap.docs) {
-      batch.delete(docSnap.ref);
+    const docs = reqSnap.docs;
+    const promises: Promise<any>[] = [];
+    for (let i = 0; i < docs.length; i += 500) {
+      const chunk = docs.slice(i, i + 500);
+      const b = writeBatch(db);
+      chunk.forEach(d => b.delete(d.ref));
+      promises.push(b.commit());
     }
-    await batch.commit();
+    await Promise.all(promises);
 
-    requestsDeleted += reqSnap.docs.length;
-    updateProgress(`Deleting collection requests (${requestsDeleted} deleted)...`);
+    requestsDeleted += docs.length;
+    updateProgress(`Deleting collection requests (${requestsDeleted.toLocaleString()} deleted)...`);
 
-    if (reqSnap.docs.length < 400) break;
+    if (docs.length < 2000) break;
   }
 
   // 4. Reset search served statistics

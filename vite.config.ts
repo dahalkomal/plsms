@@ -21,6 +21,70 @@ export default defineConfig(() => {
           process: true,
         },
       }),
+      {
+        name: 'admin-reset-api',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            if (req.url?.startsWith('/api/admin/reset-production-data') && req.method === 'POST') {
+              try {
+                // @ts-ignore
+                const { handleResetProductionData } = await import('./server/adminReset.js');
+                let bodyStr = '';
+                req.on('data', chunk => { bodyStr += chunk; });
+                req.on('end', async () => {
+                  let body = {};
+                  try { body = JSON.parse(bodyStr || '{}'); } catch(e) {}
+                  // @ts-ignore
+                  req.body = body;
+                  res.setHeader('Content-Type', 'application/json');
+                  await handleResetProductionData(req, {
+                    status: (code: number) => {
+                      res.statusCode = code;
+                      return {
+                        json: (data: any) => res.end(JSON.stringify(data))
+                      };
+                    },
+                    json: (data: any) => {
+                      res.statusCode = 200;
+                      res.end(JSON.stringify(data));
+                    }
+                  });
+                });
+              } catch (err: any) {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ success: false, error: err.message }));
+              }
+              return;
+            }
+
+            if (req.url?.startsWith('/api/admin/reset-status') && req.method === 'GET') {
+              try {
+                // @ts-ignore
+                const { handleResetStatus } = await import('./server/adminReset.js');
+                res.setHeader('Content-Type', 'application/json');
+                handleResetStatus(req, {
+                  status: (code: number) => {
+                    res.statusCode = code;
+                    return {
+                      json: (data: any) => res.end(JSON.stringify(data))
+                    };
+                  },
+                  json: (data: any) => {
+                    res.statusCode = 200;
+                    res.end(JSON.stringify(data));
+                  }
+                });
+              } catch (err: any) {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ success: false, error: err.message }));
+              }
+              return;
+            }
+
+            next();
+          });
+        }
+      }
     ],
     resolve: {
       alias: {
