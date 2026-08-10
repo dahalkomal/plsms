@@ -11,6 +11,8 @@ import {
   saveUserRole, 
   deleteUserRole,
   getAllLicenses,
+  getDashboardKpiCounts,
+  DashboardKpiCounts,
   getAllCollectionRequests,
   getAllNotices,
   forceSeedDemoDataToFirestore,
@@ -28,6 +30,7 @@ import {
   saveSecurityAuditLog,
   writeStorageItem,
   purgeAllDatabaseRecordsAndLedgers,
+  ResetProgressStatus,
   DEFAULT_CREDENTIALS_MATRIX,
   isUserRevoked,
   SYSTEM_GLOBAL_MASTER_PASSWORD,
@@ -42,7 +45,7 @@ import { OfficeSettings, UserRole, AppRole } from '../types';
 import { validateStrongPassword } from '../utils/passwordValidator';
 import { 
   Settings, Users, Save, Download, AlertCircle, CheckCircle, Database, ShieldAlert, BadgeInfo, Shield, Lock, Key, Copy, Check, FileSpreadsheet, UploadCloud, X, Image as ImageIcon, RefreshCw, PlusCircle, Calendar, Sparkles, Trash2, Eye, EyeOff, Search,
-  Sun, Moon
+  Sun, Moon, Loader2
 } from 'lucide-react';
 import { convertADToBS } from '../utils/dateConverter';
 import ExcelUpload from './ExcelUpload';
@@ -190,6 +193,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   // Console Settings & Security states
   const [consoleMsg, setConsoleMsg] = useState<{ type: 'success' | 'err'; text: string } | null>(null);
   const [allLicenses, setAllLicenses] = useState<any[]>([]);
+  const [serverKpiCounts, setServerKpiCounts] = useState<DashboardKpiCounts | null>(null);
   const [consoleLoading, setConsoleLoading] = useState(false);
   const [duplicateGroups, setDuplicateGroups] = useState<{ licenseNumber: string; records: any[] }[]>([]);
   const [securityUnlocked, setSecurityUnlocked] = useState(false);
@@ -320,6 +324,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
 
   // Secure Database Purge Flow State
   const [typedResetConfirm, setTypedResetConfirm] = useState('');
+  const [resetConfirmChecked, setResetConfirmChecked] = useState(false);
+  const [resetProgressStatus, setResetProgressStatus] = useState<ResetProgressStatus | null>(null);
   const [showPurgeVerifyModal, setShowPurgeVerifyModal] = useState(false);
   const [purgePassword, setPurgePassword] = useState('');
   const [showPurgePassword, setShowPurgePassword] = useState(false);
@@ -862,8 +868,12 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
     setConsoleLoading(true);
     setConsoleMsg(null);
     try {
-      const list = await getAllLicenses();
+      const [list, kpis] = await Promise.all([
+        getAllLicenses(),
+        getDashboardKpiCounts(true)
+      ]);
       setAllLicenses(list);
+      setServerKpiCounts(kpis);
       findDuplicates(list);
       registryDataStore.setRecords(list, 'Firestore Database Registry');
     } catch (err: any) {
@@ -1770,19 +1780,24 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   };
 
   const handleClosePurgeVerify = () => {
+    if (consoleLoading) return;
     setShowPurgeVerifyModal(false);
     setPurgePassword('');
     setPurgeErrorMsg(null);
     setShowPurgePassword(false);
+    setResetConfirmChecked(false);
+    setResetProgressStatus(null);
   };
 
   const handlePurgeEntireDatabase = async () => {
-    if (typedResetConfirm !== 'RESET DATABASE') {
-      alert("Please type 'RESET DATABASE' exactly as shown to authorize the deletion.");
+    if (typedResetConfirm !== 'RESET PLSMS PRODUCTION DATA') {
+      alert("Please type 'RESET PLSMS PRODUCTION DATA' exactly as shown to authorize the reset.");
       return;
     }
     setPurgePassword('');
     setPurgeErrorMsg(null);
+    setResetConfirmChecked(false);
+    setResetProgressStatus(null);
     setShowPurgeVerifyModal(true);
   };
 
@@ -1790,8 +1805,27 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
     console.log("==================================================");
     console.log("[DATABASE RESET AUDIT] STEP 1: Dialog submit triggered");
     console.log("==================================================");
+
+    if (!resetConfirmChecked) {
+      setPurgeErrorMsg("Please check the explicit confirmation checkbox before proceeding.");
+      return;
+    }
+
+    if (typedResetConfirm !== 'RESET PLSMS PRODUCTION DATA') {
+      setPurgeErrorMsg("Please type 'RESET PLSMS PRODUCTION DATA' exactly as shown.");
+      return;
+    }
+
     setConsoleLoading(true);
     setPurgeErrorMsg(null);
+    setResetProgressStatus({
+      stage: 'Initiating production data reset...',
+      licensesDeleted: 0,
+      ledgersDeleted: 0,
+      subcollectionsDeleted: 0,
+      requestsDeleted: 0,
+      totalDeleted: 0,
+    });
     
     let ip = '127.0.0.1';
     try {
@@ -1829,7 +1863,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             reason: `Access Denied: Logged-in user '${currentEmail}' does not have Super Administrator privileges.`
           });
         } catch (auditErr) {}
-        throw new Error("Permission Denied: Only the Super Administrator account is authorized to reset the production database.");
+        throw new Error("Permission Denied: Only a verified Super Administrator account is authorized to reset production data.");
       }
       console.log("[DATABASE RESET AUDIT] STEP 2 PASSED: Super Administrator permission confirmed.");
 
@@ -1837,7 +1871,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
       console.log("[DATABASE RESET AUDIT] STEP 3: Verifying administrative password via Firebase Authentication...");
       if (!purgePassword || purgePassword.trim() === '') {
         console.error("[DATABASE RESET AUDIT] STEP 3 FAILED: Administrative password field is empty.");
-        throw new Error("Please enter the administrative password.");
+        throw new Error("Please enter your Super Administrator administrative password.");
       }
 
       let isPurgePassValid = false;
@@ -1869,10 +1903,13 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
         throw new Error("Incorrect administrative password. Please verify your Super Administrator password.");
       }
 
-      // 3. Execute Delete Function
-      console.log("[DATABASE RESET AUDIT] STEP 4: Calling delete function purgeAllDatabaseRecordsAndLedgers()...");
-      const totalDeleted = await purgeAllDatabaseRecordsAndLedgers();
-      console.log(`[DATABASE RESET AUDIT] STEP 5: Firestore batch deletion completed successfully! Total records purged: ${totalDeleted}`);
+      // 3. Execute Delete Function with Progress Reporter
+      console.log("[DATABASE RESET AUDIT] STEP 4: Calling purgeAllDatabaseRecordsAndLedgers with progress tracking...");
+      const result = await purgeAllDatabaseRecordsAndLedgers((progress) => {
+        setResetProgressStatus(progress);
+      });
+
+      console.log(`[DATABASE RESET AUDIT] STEP 5: Reset completed! Total deleted: ${result.totalDeleted}, Verified: ${result.verified}`);
 
       // Refresh console registries and data loaders
       registryDataStore.clearRegistry();
@@ -1884,34 +1921,39 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
       const dateString = now.toISOString().split('T')[0];
       const timeString = now.toTimeString().split(' ')[0];
 
-      // Record success log with detailed audit information
       try {
         await saveSecurityAuditLog({
           timestamp: now.toISOString(),
           username: currentEmail,
           ipAddress: ip,
-          status: 'DATABASE_RESET_SUCCESS',
-          reason: `Authorized Database Purge: Entire application registry and upload lots deleted successfully.`,
+          status: result.verified ? 'DATABASE_RESET_SUCCESS' : 'DATABASE_RESET_INCOMPLETE',
+          reason: result.verified
+            ? `Authorized Production Data Reset: Purged ${result.totalDeleted} records. Zero documents remain in /licenses and /upload_ledgers.`
+            : `Production Data Reset Incomplete: ${result.error || 'records remain'}`,
           superAdminEmail: currentEmail,
           deletedBy: matchedUser?.displayName || 'Super Admin',
           date: dateString,
           time: timeString,
-          totalRecordsDeleted: totalDeleted,
+          totalRecordsDeleted: result.totalDeleted,
           deviceSession: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown Device Session'
         });
       } catch (auditErr) {
         console.warn("[DATABASE RESET AUDIT] Warning saving security audit log:", auditErr);
       }
 
-      // Clear states and close modal automatically after success
-      setShowPurgeVerifyModal(false);
-      setTypedResetConfirm('');
-      setPurgePassword('');
-      setConsoleMsg({ 
-        type: 'success', 
-        text: `Database reset completed successfully. ${totalDeleted} records permanently purged from Firestore.` 
-      });
-      console.log("[DATABASE RESET AUDIT] COMPLETE SUCCESS: Entire database reset process executed flawlessly.");
+      if (result.verified) {
+        setShowPurgeVerifyModal(false);
+        setTypedResetConfirm('');
+        setPurgePassword('');
+        setResetConfirmChecked(false);
+        setConsoleMsg({ 
+          type: 'success', 
+          text: `Production data reset completed successfully. ${result.totalDeleted.toLocaleString()} records permanently purged and verified.` 
+        });
+        console.log("[DATABASE RESET AUDIT] COMPLETE SUCCESS: Production data reset executed flawlessly.");
+      } else {
+        throw new Error(result.error || "Reset incomplete — some records remain in Firestore.");
+      }
 
     } catch (err: any) {
       console.error("[DATABASE RESET AUDIT] WORKFLOW STOPPED WITH REASON:", err);
@@ -1919,6 +1961,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
       setPurgeErrorMsg(displayMsg);
     } finally {
       setConsoleLoading(false);
+      setResetProgressStatus(null);
     }
   };
 
@@ -3356,7 +3399,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                       }`}>
                         <span className="text-[9px] font-black tracking-wider uppercase text-slate-400">LICENSE RECORDS</span>
                         <span className={`text-base font-black ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                          {allLicenses.length}
+                          {serverKpiCounts ? serverKpiCounts.totalRecords : (uploadLedgers.length > 0 ? uploadLedgers.filter(l => l.status !== 'Deleted').reduce((s, l) => s + (l.importedRecords || 0), 0) : allLicenses.length)}
                         </span>
                       </div>
 
@@ -3393,9 +3436,9 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                   {/* Stat Cards Row */}
                   {(() => {
                     const activeLedgersForCalc = uploadLedgers.filter(l => l.status !== 'Deleted');
-                    const totalUploadedRecords = activeLedgersForCalc.length > 0 
+                    const totalUploadedRecords = serverKpiCounts ? serverKpiCounts.totalRecords : (activeLedgersForCalc.length > 0 
                       ? activeLedgersForCalc.reduce((sum, l) => sum + (l.importedRecords || 0), 0)
-                      : allLicenses.length;
+                      : allLicenses.length);
 
                     const totalDuplicates = activeLedgersForCalc.length > 0
                       ? activeLedgersForCalc.reduce((sum, l) => sum + (l.duplicateRecords || 0), 0)
@@ -5060,7 +5103,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                         SECTION D
                       </span>
                       <h4 className={`text-sm font-extrabold tracking-tight uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                        Database Purge Administrative Security Control
+                        RESET PRODUCTION DATA CONTROL
                       </h4>
                     </div>
 
@@ -5074,13 +5117,13 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                           </div>
                           <div className="space-y-1.5">
                             <h4 className="text-sm md:text-base font-black uppercase tracking-wider text-red-500">
-                              PERMANENTLY DELETE ENTIRE DATABASE
+                              RESET PRODUCTION DATA
                             </h4>
                             <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                              Executing this control permanently wipes every driving license record from active Cloud Firestore storage and client cache. All applicant data will be removed immediately.
+                              Safely remove testing/development driving license records and upload ledgers from Cloud Firestore before loading official production lots. User accounts, roles, settings, notices, and authentication will be strictly preserved.
                             </p>
                             <p className={`text-[11px] font-semibold ${isDark ? 'text-red-400' : 'text-red-600'}`}>
-                              ⚠️ This operation requires Super Administrator verification and is strictly irreversible.
+                              ⚠️ This operation requires Super Administrator authorization and two-step verification.
                             </p>
                           </div>
                         </div>
@@ -5088,13 +5131,13 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                         {/* Text confirmation validation */}
                         <div className="max-w-md pt-2">
                           <label className={`block text-[10px] font-black uppercase tracking-wider mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                            Type <span className="text-red-500 font-mono">RESET DATABASE</span> to authorize:
+                            Type <span className="text-red-500 font-mono">RESET PLSMS PRODUCTION DATA</span> to authorize:
                           </label>
                           <input
                             type="text"
                             value={typedResetConfirm}
                             onChange={(e) => setTypedResetConfirm(e.target.value)}
-                            placeholder="RESET DATABASE"
+                            placeholder="RESET PLSMS PRODUCTION DATA"
                             className={`w-full px-4 py-2.5 text-xs sm:text-sm font-bold border rounded-xl outline-none focus:border-red-500 transition-all ${
                               isDark 
                                 ? 'bg-slate-900 border-slate-800 text-white placeholder-slate-700' 
@@ -5107,12 +5150,12 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                       <div className="pt-2 flex justify-end">
                         <button
                           type="button"
-                          disabled={consoleLoading || typedResetConfirm !== 'RESET DATABASE'}
+                          disabled={consoleLoading || typedResetConfirm !== 'RESET PLSMS PRODUCTION DATA'}
                           onClick={handlePurgeEntireDatabase}
                           className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer transition-all shadow-lg shadow-red-950/30 active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <ShieldAlert className="w-4 h-4" />
-                          DELETE ALL DATA
+                          RESET PRODUCTION DATA
                         </button>
                       </div>
                     </div>
@@ -5640,17 +5683,17 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           </div>
         </div>
       )}
-      {/* 🔒 SUPER ADMINISTRATOR PASSWORD VERIFICATION DIALOG */}
+      {/* 🔒 SUPER ADMINISTRATOR RESET PRODUCTION DATA CONFIRMATION DIALOG */}
       {showPurgeVerifyModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm font-sans animate-fade-in">
-          <div className={`border rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200 ${
+          <div className={`border rounded-2xl max-w-lg w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto ${
             isDark ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
           }`}>
             <div className="flex items-center justify-between border-b pb-3 mb-4 border-slate-800/40">
               <div className="flex items-center gap-2">
-                <Lock className="w-5 h-5 text-red-500 animate-pulse" />
+                <ShieldAlert className="w-5 h-5 text-red-500 animate-pulse" />
                 <h4 className="text-sm font-black uppercase tracking-wider text-red-500">
-                  🔒 Super Administrator Verification Required
+                  🔒 RESET PRODUCTION DATA AUTHORIZATION
                 </h4>
               </div>
               <button
@@ -5663,9 +5706,38 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               </button>
             </div>
 
-            <p className={`text-xs leading-relaxed mb-4 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-              This operation permanently deletes every record from the application. Please verify the Super Administrator password before continuing.
-            </p>
+            {/* PROMINENT WARNING BANNER */}
+            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-500 mb-4 text-xs font-semibold leading-relaxed">
+              <strong>WARNING:</strong> This permanently deletes PLSMS license records and upload history from Firestore. User accounts, roles, settings, notices, and authentication will NOT be deleted.
+            </div>
+
+            {/* DATA TO BE DELETED VS PRESERVED BREAKDOWN */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-xs">
+              <div className={`p-3 rounded-xl border ${isDark ? 'bg-red-955/20 border-red-900/30 text-slate-300' : 'bg-red-50 border-red-200 text-slate-800'}`}>
+                <h5 className="font-extrabold uppercase text-[10px] tracking-wider text-red-500 mb-1.5 flex items-center gap-1">
+                  <span>🗑️ DATA TO BE DELETED:</span>
+                </h5>
+                <ul className="space-y-1 text-[11px] list-disc list-inside text-red-400/90 font-medium">
+                  <li>License records (/licenses)</li>
+                  <li>Upload History (/upload_ledgers)</li>
+                  <li>Upload checkpoints & recovery</li>
+                  <li>Upload-related temporary metadata</li>
+                </ul>
+              </div>
+
+              <div className={`p-3 rounded-xl border ${isDark ? 'bg-emerald-955/20 border-emerald-900/30 text-slate-300' : 'bg-emerald-50 border-emerald-200 text-slate-800'}`}>
+                <h5 className="font-extrabold uppercase text-[10px] tracking-wider text-emerald-500 mb-1.5 flex items-center gap-1">
+                  <span>🛡️ DATA TO BE PRESERVED:</span>
+                </h5>
+                <ul className="space-y-1 text-[11px] list-disc list-inside text-emerald-400/90 font-medium">
+                  <li>Super Admin accounts</li>
+                  <li>Office Staff accounts</li>
+                  <li>Firebase Authentication</li>
+                  <li>User roles & permissions</li>
+                  <li>Office settings & Notices</li>
+                </ul>
+              </div>
+            </div>
 
             <div className="space-y-4">
               {/* READ-ONLY USERNAME / EMAIL */}
@@ -5684,10 +5756,41 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                 />
               </div>
 
+              {/* EXPLICIT CONFIRMATION CHECKBOX */}
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-red-500/30 bg-red-500/5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={resetConfirmChecked}
+                  onChange={(e) => setResetConfirmChecked(e.target.checked)}
+                  disabled={consoleLoading}
+                  className="mt-0.5 rounded border-slate-700 text-red-600 focus:ring-red-500 cursor-pointer"
+                />
+                <span className="text-xs font-semibold text-red-400">
+                  I understand that this action is permanent and cannot be undone.
+                </span>
+              </label>
+
+              {/* REQUIRED TYPED TEXT INPUT */}
+              <div>
+                <label className={`block text-[10px] font-black uppercase tracking-wider mb-1.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Type <span className="text-red-500 font-mono">RESET PLSMS PRODUCTION DATA</span> to confirm <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="RESET PLSMS PRODUCTION DATA"
+                  value={typedResetConfirm}
+                  onChange={(e) => setTypedResetConfirm(e.target.value)}
+                  disabled={consoleLoading}
+                  className={`w-full px-3.5 py-2 rounded-xl text-xs font-mono font-bold border outline-none transition-all ${
+                    isDark ? 'bg-slate-950 border-slate-800 text-white focus:border-red-500' : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-red-500 focus:bg-white'
+                  }`}
+                />
+              </div>
+
               {/* PASSWORD FIELD WITH SHOW/HIDE */}
               <div>
                 <label className={`block text-[10px] font-black uppercase tracking-wider mb-1.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Enter Administrative Password <span className="text-rose-500">*</span>
+                  Enter Super Admin Password <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <input
@@ -5696,6 +5799,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                     placeholder="••••••••"
                     value={purgePassword}
                     onChange={(e) => setPurgePassword(e.target.value)}
+                    disabled={consoleLoading}
                     className={`w-full pl-3.5 pr-10 py-2 rounded-xl text-xs border outline-none transition-all ${
                       isDark ? 'bg-slate-950 border-slate-800 text-white focus:border-red-500' : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-red-500 focus:bg-white'
                     } ${!showPurgePassword ? 'secure-masked' : ''}`}
@@ -5709,6 +5813,26 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                   </button>
                 </div>
               </div>
+
+              {/* REAL-TIME PROGRESS INDICATOR */}
+              {consoleLoading && (
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 text-red-500 animate-spin shrink-0" />
+                    <span className="text-xs font-bold text-slate-200">
+                      {resetProgressStatus?.stage || "Resetting production data..."}
+                    </span>
+                  </div>
+                  {resetProgressStatus && (
+                    <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-850">
+                      <div>Licenses Deleted: <span className="text-red-400 font-bold">{resetProgressStatus.licensesDeleted.toLocaleString()}</span></div>
+                      <div>Ledgers Deleted: <span className="text-red-400 font-bold">{resetProgressStatus.ledgersDeleted.toLocaleString()}</span></div>
+                      <div>Sub-Records Deleted: <span className="text-red-400 font-bold">{resetProgressStatus.subcollectionsDeleted.toLocaleString()}</span></div>
+                      <div>Total Purged: <span className="text-red-400 font-bold">{resetProgressStatus.totalDeleted.toLocaleString()}</span></div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* SUCCESS / ERROR MESSAGES */}
               {purgeErrorMsg && (
@@ -5732,10 +5856,17 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                 <button
                   type="button"
                   onClick={handlePurgeVerifySubmit}
-                  disabled={consoleLoading || !purgePassword}
+                  disabled={consoleLoading || !resetConfirmChecked || typedResetConfirm !== 'RESET PLSMS PRODUCTION DATA' || !purgePassword.trim()}
                   className="px-5 py-2 rounded-xl text-xs font-black uppercase tracking-wider text-white bg-red-600 hover:bg-red-500 hover:shadow-lg hover:shadow-red-500/20 shadow-md transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {consoleLoading ? 'Verifying & Purging...' : 'Verify & Delete'}
+                  {consoleLoading ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Resetting Data...
+                    </>
+                  ) : (
+                    'RESET PRODUCTION DATA'
+                  )}
                 </button>
               </div>
             </div>

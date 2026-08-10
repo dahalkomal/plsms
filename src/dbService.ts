@@ -848,16 +848,17 @@ export async function getDashboardKpiCounts(forceRefresh: boolean = false): Prom
         clearQuotaExceededFlag();
 
         const total = totalSnap.data().count;
-        const distCountOnly = distSnap.data().count;
+        const distributedCount = distSnap.data().count;
         const missingCount = missingSnap.data().count;
         const foundCount = foundSnap.data().count;
 
-        const distributedCount = distCountOnly + foundCount;
-        const notDistributed = Math.max(0, total - distributedCount);
+        // Authoritative reconciliation: status categories are strictly mutually exclusive and exhaustive.
+        // sum(notDistributed + distributed + missing + found) === totalRecords
+        const notDistributed = Math.max(0, total - (distributedCount + missingCount + foundCount));
 
         const res = {
           totalRecords: total,
-          availableCount: total,
+          availableCount: notDistributed,
           notDistributedCount: notDistributed,
           distributedCount,
           missingCount,
@@ -871,27 +872,31 @@ export async function getDashboardKpiCounts(forceRefresh: boolean = false): Prom
       }
     }
 
-    // Demo mode or fallback
+    // Demo mode or fallback using best available store/backup datasets
     const storeRecords = registryDataStore.getRecords();
     const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
-    const list = storeRecords.length >= storageRecords.length ? storeRecords : storageRecords;
+    const backupRecords = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
+    
+    let list = storeRecords;
+    if (storageRecords.length > list.length) list = storageRecords;
+    if (backupRecords.length > list.length) list = backupRecords;
+
     let dist = 0, missing = 0, found = 0;
     for (const l of list) {
       if (l.status === 'missing') {
         missing++;
       } else if (l.status === 'found') {
         found++;
-        dist++;
       } else if (l.status === 'distributed' || isLicenseDistributed(l)) {
         dist++;
       }
     }
     const totalRecords = list.length;
-    const notDist = Math.max(0, totalRecords - dist);
+    const notDist = Math.max(0, totalRecords - (dist + missing + found));
 
     const fallbackRes = {
       totalRecords,
-      availableCount: totalRecords,
+      availableCount: notDist,
       notDistributedCount: notDist,
       distributedCount: dist,
       missingCount: missing,
@@ -973,10 +978,10 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
 
       const filteredRecords = records.filter(l => {
         if (statusFilter === 'distributed') {
-          return isLicenseDistributed(l) && l.status !== 'missing';
+          return (l.status === 'distributed' || isLicenseDistributed(l)) && l.status !== 'missing' && l.status !== 'found';
         }
         if (statusFilter === 'not_distributed') {
-          return (!isLicenseDistributed(l) && l.status !== 'found') || l.status === 'missing';
+          return !isLicenseDistributed(l) && l.status !== 'missing' && l.status !== 'found';
         }
         if (statusFilter === 'missing') {
           return l.status === 'missing';
@@ -2635,7 +2640,36 @@ export async function saveSecurityAuditLog(log: SecurityAuditLog): Promise<void>
   await addDoc(collection(db, 'security_audit_logs'), log);
 }
 
-export async function purgeAllDatabaseRecordsAndLedgers(): Promise<number> {
+export interface ResetProgressStatus {
+  stage: string;
+  licensesDeleted: number;
+  ledgersDeleted: number;
+  subcollectionsDeleted: number;
+  requestsDeleted: number;
+  totalDeleted: number;
+}
+
+export async function purgeAllDatabaseRecordsAndLedgers(
+  onProgress?: (progress: ResetProgressStatus) => void
+): Promise<{ totalDeleted: number; verified: boolean; error?: string }> {
+  let licensesDeleted = 0;
+  let ledgersDeleted = 0;
+  let subcollectionsDeleted = 0;
+  let requestsDeleted = 0;
+
+  const updateProgress = (stage: string) => {
+    if (onProgress) {
+      onProgress({
+        stage,
+        licensesDeleted,
+        ledgersDeleted,
+        subcollectionsDeleted,
+        requestsDeleted,
+        totalDeleted: licensesDeleted + ledgersDeleted + subcollectionsDeleted + requestsDeleted,
+      });
+    }
+  };
+
   if (isDemoModeActive()) {
     let total = 0;
     const lics = fetchStorageItem<any[]>('plsms_mock_licenses', []);
@@ -2659,7 +2693,7 @@ export async function purgeAllDatabaseRecordsAndLedgers(): Promise<number> {
         total++;
       }
     }
-    return total;
+    return { totalDeleted: total, verified: true };
   }
 
   // Clear local storage caches in all modes
@@ -2671,7 +2705,7 @@ export async function purgeAllDatabaseRecordsAndLedgers(): Promise<number> {
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
-      if (key && (key.startsWith('plsms_mock_ledger_backups_') || key.startsWith('plsms_registry_cache'))) {
+      if (key && (key.startsWith('plsms_mock_ledger_backups_') || key.startsWith('plsms_registry_cache') || key.startsWith('plsms_live_licenses_backup'))) {
         localStorage.removeItem(key);
       }
     }
@@ -2679,105 +2713,131 @@ export async function purgeAllDatabaseRecordsAndLedgers(): Promise<number> {
     console.warn("Error cleaning local storage during purge:", e);
   }
 
-  const { writeBatch } = await import('firebase/firestore');
-  let totalDeleted = 0;
+  const { writeBatch, query, collection, limit, getDocs, deleteDoc, getCountFromServer, doc, setDoc } = await import('firebase/firestore');
 
-  // 1. Delete all licenses
-  const licensesQuery = await getDocs(collection(db, 'licenses'));
-  let batch = writeBatch(db);
-  let count = 0;
-  for (const docSnap of licensesQuery.docs) {
-    batch.delete(docSnap.ref);
-    count++;
-    totalDeleted++;
-    if (count === 500) {
-      await batch.commit();
-      batch = writeBatch(db);
-      count = 0;
-    }
-  }
-  if (count > 0) {
-    await batch.commit();
-  }
+  // 1. Delete all license records in bounded batches (chunk size 400 to prevent high memory usage)
+  updateProgress('Deleting license records from Firestore...');
+  const licensesCol = collection(db, 'licenses');
+  while (true) {
+    const snap = await getDocs(query(licensesCol, limit(400)));
+    if (snap.empty) break;
 
-  // 2. Delete all upload ledgers and their subcollection records
-  const ledgersQuery = await getDocs(collection(db, 'upload_ledgers'));
-  for (const ledgerDoc of ledgersQuery.docs) {
-    const recordsQuery = await getDocs(collection(db, 'upload_ledgers', ledgerDoc.id, 'records'));
-    batch = writeBatch(db);
-    count = 0;
-    for (const recordDoc of recordsQuery.docs) {
-      batch.delete(recordDoc.ref);
-      count++;
-      totalDeleted++;
-      if (count === 500) {
-        await batch.commit();
-        batch = writeBatch(db);
-        count = 0;
-      }
-    }
-    if (count > 0) {
-      await batch.commit();
-    }
-    
-    // Delete the ledger document itself
-    await deleteDoc(ledgerDoc.ref);
-    totalDeleted++;
-  }
-
-  // 3. Delete all collection requests
-  const requestsQuery = await getDocs(collection(db, 'collection_requests'));
-  batch = writeBatch(db);
-  count = 0;
-  for (const docSnap of requestsQuery.docs) {
-    batch.delete(docSnap.ref);
-    count++;
-    totalDeleted++;
-    if (count === 500) {
-      await batch.commit();
-      batch = writeBatch(db);
-      count = 0;
-    }
-  }
-  if (count > 0) {
-    await batch.commit();
-  }
-
-  // 4. Skip notices deletion to preserve administrative/announcement notices
-  // Notices are managed by Super Admin and should remain untouched during standard resets.
-
-  // 5. Delete existing security audit logs (except any incoming ones, we do it in a fresh batch)
-  try {
-    const auditQuery = await getDocs(collection(db, 'security_audit_logs'));
-    batch = writeBatch(db);
-    count = 0;
-    for (const docSnap of auditQuery.docs) {
+    const batch = writeBatch(db);
+    for (const docSnap of snap.docs) {
       batch.delete(docSnap.ref);
-      count++;
-      totalDeleted++;
-      if (count === 500) {
-        await batch.commit();
-        batch = writeBatch(db);
-        count = 0;
-      }
     }
-    if (count > 0) {
-      await batch.commit();
-    }
-  } catch (auditErr) {
-    console.warn("Failed to delete existing security audit logs:", auditErr);
+    await batch.commit();
+
+    licensesDeleted += snap.docs.length;
+    updateProgress(`Deleting license records (${licensesDeleted.toLocaleString()} deleted)...`);
+
+    if (snap.docs.length < 400) break;
   }
 
-  // 6. Reset search served statistics
+  // 2. Delete upload ledgers and their subcollection records/checkpoints in bounded batches
+  updateProgress('Deleting upload history ledgers and metadata...');
+  const ledgersCol = collection(db, 'upload_ledgers');
+  while (true) {
+    const ledgersSnap = await getDocs(query(ledgersCol, limit(50)));
+    if (ledgersSnap.empty) break;
+
+    for (const ledgerDoc of ledgersSnap.docs) {
+      // Subcollection 'records'
+      const recordsCol = collection(db, 'upload_ledgers', ledgerDoc.id, 'records');
+      while (true) {
+        const recSnap = await getDocs(query(recordsCol, limit(400)));
+        if (recSnap.empty) break;
+        const b = writeBatch(db);
+        recSnap.docs.forEach(d => b.delete(d.ref));
+        await b.commit();
+        subcollectionsDeleted += recSnap.docs.length;
+        if (recSnap.docs.length < 400) break;
+      }
+
+      // Subcollection 'checkpoints'
+      const checkCol = collection(db, 'upload_ledgers', ledgerDoc.id, 'checkpoints');
+      while (true) {
+        const chkSnap = await getDocs(query(checkCol, limit(400)));
+        if (chkSnap.empty) break;
+        const b = writeBatch(db);
+        chkSnap.docs.forEach(d => b.delete(d.ref));
+        await b.commit();
+        subcollectionsDeleted += chkSnap.docs.length;
+        if (chkSnap.docs.length < 400) break;
+      }
+
+      // Delete ledger document itself
+      await deleteDoc(ledgerDoc.ref);
+      ledgersDeleted++;
+      updateProgress(`Deleting upload ledgers (${ledgersDeleted} ledgers, ${subcollectionsDeleted} sub-records deleted)...`);
+    }
+
+    if (ledgersSnap.docs.length < 50) break;
+  }
+
+  // 3. Delete card collection requests
+  updateProgress('Deleting card collection requests...');
+  const requestsCol = collection(db, 'collection_requests');
+  while (true) {
+    const reqSnap = await getDocs(query(requestsCol, limit(400)));
+    if (reqSnap.empty) break;
+
+    const batch = writeBatch(db);
+    for (const docSnap of reqSnap.docs) {
+      batch.delete(docSnap.ref);
+    }
+    await batch.commit();
+
+    requestsDeleted += reqSnap.docs.length;
+    updateProgress(`Deleting collection requests (${requestsDeleted} deleted)...`);
+
+    if (reqSnap.docs.length < 400) break;
+  }
+
+  // 4. Reset search served statistics
   try {
     const statRef = doc(db, 'statistics', 'search_served');
     await setDoc(statRef, { totalSearchesServed: 0 });
-    totalDeleted++;
   } catch (err) {
     console.warn("Failed to reset statistics document:", err);
   }
 
-  return totalDeleted;
+  // 5. Final verification directly against Firestore
+  updateProgress('Verifying database state directly with Firestore...');
+  let verified = false;
+  let verifyError: string | undefined = undefined;
+
+  try {
+    const licCountSnap = await getCountFromServer(licensesCol);
+    const ledgerCountSnap = await getCountFromServer(ledgersCol);
+    const finalLicCount = licCountSnap.data().count;
+    const finalLedgerCount = ledgerCountSnap.data().count;
+
+    if (finalLicCount === 0 && finalLedgerCount === 0) {
+      verified = true;
+    } else {
+      verified = false;
+      verifyError = `Reset incomplete — ${finalLicCount} license(s) and ${finalLedgerCount} ledger(s) remain in Firestore.`;
+    }
+  } catch (verifyErr: any) {
+    const licSnap = await getDocs(query(licensesCol, limit(1)));
+    const ledgerSnap = await getDocs(query(ledgersCol, limit(1)));
+    if (licSnap.empty && ledgerSnap.empty) {
+      verified = true;
+    } else {
+      verified = false;
+      verifyError = `Reset incomplete — some records remain in Firestore.`;
+    }
+  }
+
+  const grandTotal = licensesDeleted + ledgersDeleted + subcollectionsDeleted + requestsDeleted;
+  updateProgress(verified ? 'Reset completed successfully!' : 'Reset incomplete.');
+
+  return {
+    totalDeleted: grandTotal,
+    verified,
+    error: verifyError,
+  };
 }
 
 // ==================== PERMANENT EXCEL ARCHIVE & UPLOAD HISTORY SERVICES ====================

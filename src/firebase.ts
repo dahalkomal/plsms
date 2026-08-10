@@ -1,15 +1,22 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, EmailAuthProvider, reauthenticateWithCredential, deleteUser } from 'firebase/auth';
-import { initializeFirestore, doc, getDoc, getDocFromServer } from 'firebase/firestore';
+import { initializeFirestore, setLogLevel, doc, getDoc, getDocFromServer } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// Suppress transient offline/connection retry console warnings in sandboxed preview environments
+try {
+  setLogLevel('silent');
+} catch (e) {
+  // ignore
+}
 
 const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 
-export async function withFirestoreRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 300): Promise<T> {
+export async function withFirestoreRetry<T>(fn: () => Promise<T>, maxRetries = 4, delayMs = 400): Promise<T> {
   let attempt = 0;
   while (true) {
     try {
@@ -18,7 +25,7 @@ export async function withFirestoreRetry<T>(fn: () => Promise<T>, maxRetries = 3
       attempt++;
       const errCode = String(err?.code || '').toLowerCase();
       const errMsg = String(err?.message || err || '').toLowerCase();
-      const isUnavailable = errCode.includes('unavailable') || errMsg.includes('could not reach cloud firestore') || errMsg.includes('connection failed') || errMsg.includes('unavailable');
+      const isUnavailable = errCode.includes('unavailable') || errMsg.includes('could not reach cloud firestore') || errMsg.includes('connection failed') || errMsg.includes('unavailable') || errMsg.includes('offline');
       if (isUnavailable && attempt < maxRetries) {
         await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
         continue;
@@ -86,11 +93,14 @@ export function isQuotaOrMemoryError(err: unknown): boolean {
   return (
     errCode === 'resource-exhausted' ||
     errCode.includes('resource-exhausted') ||
+    errCode.includes('unavailable') ||
     errMsg.includes('quota') ||
     errMsg.includes('exhausted') ||
     errMsg.includes('128.00') ||
     errMsg.includes('limit is') ||
-    errMsg.includes('query failed')
+    errMsg.includes('query failed') ||
+    errMsg.includes('could not reach cloud firestore') ||
+    errMsg.includes('connection failed')
   );
 }
 
@@ -285,15 +295,15 @@ export async function verifyAndReauthenticateSuperAdmin(email: string, pass: str
 // Connection helper
 export async function testConnection() {
   try {
-    await getDoc(doc(db, 'office_settings', 'settings'));
+    await withFirestoreRetry(() => getDoc(doc(db, 'office_settings', 'settings')), 2, 500);
   } catch (error: any) {
     const errCode = String(error?.code || '').toLowerCase();
     const errMsg = String(error?.message || error || '').toLowerCase();
-    if (errCode.includes('unavailable') || errMsg.includes('could not reach cloud firestore') || errMsg.includes('offline')) {
+    if (errCode.includes('unavailable') || errMsg.includes('could not reach cloud firestore') || errMsg.includes('offline') || errMsg.includes('connection failed')) {
       console.warn("Firestore offline/connecting notice: Operating in cached/offline mode.");
     } else {
       console.warn("Firestore connection check info:", error);
     }
   }
 }
-testConnection();
+testConnection().catch(e => console.warn("Initial connection test notice:", e));

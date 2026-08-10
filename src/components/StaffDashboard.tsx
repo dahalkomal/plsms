@@ -1001,7 +1001,6 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         missing++;
       } else if (l.status === 'found') {
         found++;
-        dist++;
       } else if (l.status === 'distributed' || isLicenseDistributed(l)) {
         dist++;
       }
@@ -1010,11 +1009,11 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
     }
 
     const total = processedLicenses.length;
-    const notDist = Math.max(0, total - dist);
+    const notDist = Math.max(0, total - (dist + missing + found));
 
     return {
       totalRecords: total,
-      availableCount: total,
+      availableCount: notDist,
       notDistributedCount: notDist,
       distributedCount: dist,
       missingCount: missing,

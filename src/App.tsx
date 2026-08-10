@@ -146,7 +146,7 @@ export default function App() {
 
   const handleDownloadQr = async () => {
     try {
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&color=1e3a8a&data=${encodeURIComponent('https://tmodl-sunsari.onrender.com/')}`;
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&color=1e3a8a&data=${encodeURIComponent('https://plsms.onrender.com/')}`;
       const response = await fetch(qrUrl);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -175,64 +175,71 @@ export default function App() {
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                height: 100vh;
+                min-height: 100vh;
                 margin: 0;
+                padding: 24px;
                 font-family: system-ui, -apple-system, sans-serif;
                 color: #1e3a8a;
+                box-sizing: border-box;
+              }
+              .office-title {
+                font-size: 18px;
+                font-weight: 900;
+                text-align: center;
+                color: #1e3a8a;
+                margin: 0;
+                letter-spacing: -0.02em;
+                white-space: nowrap;
+              }
+              .office-address {
+                font-size: 13px;
+                font-weight: 600;
+                text-align: center;
+                color: #475569;
+                margin: 4px 0 20px 0;
               }
               .container {
                 border: 3px dashed #1e3a8a;
                 border-radius: 24px;
-                padding: 32px;
+                padding: 28px;
                 background: white;
                 display: flex;
                 align-items: center;
                 justify-content: center;
               }
               img {
-                width: 280px;
-                height: 280px;
+                width: 260px;
+                height: 260px;
               }
-              h2 {
-                margin-top: 24px;
-                font-size: 18px;
+              .plsms-title {
+                margin-top: 20px;
+                font-size: 13px;
                 font-weight: 800;
                 text-align: center;
                 color: #1e3a8a;
-              }
-              h3 {
-                margin-top: 4px;
-                font-size: 14px;
-                font-weight: 700;
-                text-align: center;
-                color: #0f172a;
-              }
-              p {
-                margin-top: 2px;
-                font-size: 12px;
-                color: #64748b;
-                text-align: center;
+                white-space: nowrap;
               }
               .link {
-                margin-top: 16px;
-                padding: 6px 16px;
+                margin-top: 14px;
+                padding: 8px 20px;
                 background: #f0fdf4;
                 border: 1px solid #bbf7d0;
-                border-radius: 8px;
+                border-radius: 10px;
                 font-family: monospace;
-                font-size: 12px;
+                font-size: 13px;
+                font-weight: 700;
                 color: #166534;
               }
             </style>
           </head>
           <body>
+            <h1 class="office-title">Transport Management Office, Driving License</h1>
+            <div class="office-address">Itahari, Sunsari</div>
             <div class="container">
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=350x350&color=1e3a8a&data=${encodeURIComponent('https://tmodl-sunsari.onrender.com/')}" />
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=350x350&color=1e3a8a&data=${encodeURIComponent('https://plsms.onrender.com/')}" />
             </div>
-            <h2>Printed License Search Management System (PLSMS)</h2>
-            <h3>Transport Management Office</h3>
-            <p>Itahari, Sunsari</p>
-            <div class="link">https://tmodl-sunsari.onrender.com/</div>
+            <div class="plsms-title">Printed License Search Management System (PLSMS)</div>
+            <div class="link">https://plsms.onrender.com/</div>
             <script>
               window.onload = function() {
                 window.print();
@@ -247,7 +254,7 @@ export default function App() {
   };
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText('https://tmodl-sunsari.onrender.com/');
+    navigator.clipboard.writeText('https://plsms.onrender.com/');
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
@@ -2300,7 +2307,7 @@ export default function App() {
       {/* Interactive QR Code Modal */}
       {showQrModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs transition-opacity duration-300">
-          <div className="w-full max-w-[420px] rounded-3xl overflow-hidden shadow-2xl border border-slate-200 bg-white text-slate-900 transition-all transform scale-100 flex flex-col">
+          <div className="w-full max-w-[480px] rounded-3xl overflow-hidden shadow-2xl border border-slate-200 bg-white text-slate-900 transition-all transform scale-100 flex flex-col">
             {/* Header */}
             <div className="p-4 flex items-center justify-between bg-[#1e3a8a] text-white border-b-4 border-[#da251d]">
               <div className="flex items-center gap-2">
@@ -2317,31 +2324,39 @@ export default function App() {
             </div>
             
             {/* Body */}
-            <div className="p-6 md:p-8 flex flex-col items-center bg-white">
+            <div className="p-5 sm:p-6 flex flex-col items-center bg-white w-full">
+              {/* Top: Office Name in Big Font - strictly single line */}
+              <div className="w-full text-center overflow-x-auto no-scrollbar py-0.5">
+                <h2 className="text-[#1e3a8a] font-black text-[14px] sm:text-[16px] md:text-[17px] text-center leading-tight tracking-tight whitespace-nowrap inline-block">
+                  Transport Management Office, Driving License
+                </h2>
+              </div>
+              
+              {/* Office Address: font size approximately half of Office Name */}
+              <p className="text-slate-600 font-bold text-[11px] sm:text-[12px] text-center mt-0.5 mb-4">
+                Itahari, Sunsari
+              </p>
+
               {/* Dashed QR Box wrapper */}
-              <div className="border-2 border-dashed border-[#1e3a8a] rounded-3xl p-6 flex items-center justify-center bg-white w-full max-w-[240px] aspect-square shadow-xs mb-5">
+              <div className="border-2 border-dashed border-[#1e3a8a] rounded-3xl p-5 flex items-center justify-center bg-white w-full max-w-[220px] aspect-square shadow-xs mb-4">
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=1e3a8a&data=${encodeURIComponent('https://tmodl-sunsari.onrender.com/')}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=1e3a8a&data=${encodeURIComponent('https://plsms.onrender.com/')}`}
                   alt="QR Code"
                   className="w-full h-full object-contain"
                   referrerPolicy="no-referrer"
                 />
               </div>
 
-              {/* System & Office Metadata */}
-              <h3 className="text-[#1e3a8a] font-extrabold text-[13px] md:text-sm text-center leading-snug tracking-tight">
-                Printed License Search Management System (PLSMS)
-              </h3>
-              <p className="text-slate-900 font-extrabold text-xs md:text-[13px] text-center mt-1 leading-snug">
-                Transport Management Office
-              </p>
-              <p className="text-slate-500 font-semibold text-[10px] md:text-xs text-center mt-0.5 mb-5">
-                Itahari, Sunsari
-              </p>
+              {/* System Title in Single Line */}
+              <div className="w-full text-center overflow-x-auto no-scrollbar py-1">
+                <h3 className="text-[#1e3a8a] font-extrabold text-[11px] sm:text-[12px] md:text-[13px] text-center whitespace-nowrap tracking-tight inline-block">
+                  Printed License Search Management System (PLSMS)
+                </h3>
+              </div>
 
               {/* Website Link Display Pill */}
-              <div className="w-full bg-blue-50/70 border border-blue-100 text-[#1e3a8a] text-xs font-mono font-bold py-2 px-4 rounded-xl text-center select-all shadow-inner tracking-tight">
-                https://tmodl-sunsari.onrender.com/
+              <div className="w-full bg-blue-50/70 border border-blue-100 text-[#1e3a8a] text-xs font-mono font-bold py-2.5 px-3 rounded-xl text-center select-all shadow-inner tracking-tight mt-3">
+                https://plsms.onrender.com/
               </div>
             </div>
 
