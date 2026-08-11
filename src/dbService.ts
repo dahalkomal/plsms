@@ -1755,6 +1755,7 @@ function ensureKomalDahalAccount(list: UserRole[]): UserRole[] {
       status: 'ACTIVE',
       email: 'dahalkomal@gmail.com',
       username: 'Super_Admin',
+      mobile: result[komalIndex].mobile || '9842033214',
       post: result[komalIndex].post || 'System Controller'
     };
   }

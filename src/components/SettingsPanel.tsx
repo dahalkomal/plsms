@@ -2178,6 +2178,10 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
       onConfirm: async () => {
         setConfirmState(prev => ({ ...prev, show: false }));
         setUserMsg(null);
+        
+        // Optimistically update UI list state immediately
+        setUsersList(prev => prev.map(u => (u.id === user.id || (u.username && u.username.toLowerCase() === (user.username || '').toLowerCase())) ? { ...u, status: nextStatus } : u));
+
         try {
           await saveUserRole(user.id, {
             ...user,
@@ -2185,7 +2189,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             updatedAt: new Date().toISOString()
           });
           setUserMsg({ type: 'success', text: `Successfully updated status of ${user.displayName || user.username || user.email} to ${nextStatus}.` });
-          fetchUsersRoles();
+          await fetchUsersRoles();
         } catch (err: any) {
           setUserMsg({ type: 'err', text: err?.message || "Failed to update status." });
         }
@@ -2193,8 +2197,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
     });
   };
 
-  const handleResetPassword = async (user: UserRole) => {
-    // Automatically fetch default password based on role/post:
+  const handleResetPassword = async (user: UserRole, customPassToUse?: string, forceChange?: boolean) => {
     const isSuperOrAdmin = 
       user.role === 'superuser' || 
       user.role === 'admin' || 
@@ -2203,15 +2206,17 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
       (user.email && (user.email.toLowerCase() === 'dahalkomal@gmail.com' || user.email.toLowerCase() === 'dahalutkrishta@gmail.com'));
 
     const defaultPass = isSuperOrAdmin ? 'Itahari@PLSMS2083' : 'Itahari@2026';
+    const finalPass = customPassToUse?.trim() ? customPassToUse.trim() : defaultPass;
+    const forceMustChange = forceChange !== undefined ? forceChange : true;
 
     try {
-      const passHash = await hashCredential(defaultPass);
+      const passHash = await hashCredential(finalPass);
       const currentVersion = user.passwordVersion || 1;
       const now = new Date().toISOString();
 
-      if (auth.currentUser && (auth.currentUser.email === user.email || user.id === 'Super_Admin')) {
+      if (auth.currentUser && (auth.currentUser.email === user.email || user.id === 'Super_Admin' || user.email?.toLowerCase() === 'dahalkomal@gmail.com')) {
         try {
-          await updatePassword(auth.currentUser, defaultPass);
+          await updatePassword(auth.currentUser, finalPass);
         } catch (e) {
           console.warn("Notice: Firebase Auth password update:", e);
         }
@@ -2222,9 +2227,9 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
         passwordHash: passHash,
         passwordVersion: currentVersion + 1,
         passwordLastChanged: now,
-        isCustomPassword: false,
-        mustChangePassword: true,
-        temporaryPassword: defaultPass,
+        isCustomPassword: finalPass !== defaultPass,
+        mustChangePassword: forceMustChange,
+        temporaryPassword: finalPass,
         updatedAt: now,
         updatedBy: currentUserEmail || 'Super_Admin'
       });
@@ -2232,16 +2237,16 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
       setResetModalState({
         show: true,
         user,
-        customPassword: defaultPass,
-        forceChange: true,
-        successPasswordInfo: defaultPass,
+        customPassword: finalPass,
+        forceChange: forceMustChange,
+        successPasswordInfo: finalPass,
       });
 
       setUserMsg({ 
         type: 'success', 
-        text: `The password resetting successfully for ${user.displayName || user.username || user.email}!` 
+        text: `Password reset successfully for ${user.displayName || user.username || user.email}!` 
       });
-      fetchUsersRoles();
+      await fetchUsersRoles();
     } catch (err: any) {
       setUserMsg({ type: 'err', text: err?.message || "Failed to reset password." });
     }
@@ -2249,11 +2254,15 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
 
   const handleExecuteResetPassword = async () => {
     if (!resetModalState.user) return;
-    await handleResetPassword(resetModalState.user);
+    await handleResetPassword(
+      resetModalState.user,
+      resetModalState.customPassword,
+      resetModalState.forceChange
+    );
   };
 
-  const handleDeleteUserRole = (id: string) => {
-    const targetUser = usersList.find(u => u.id === id);
+  const handleDeleteUserRole = (id: string, userObj?: UserRole) => {
+    const targetUser = userObj || usersList.find(u => u.id === id || u.username === id || u.email === id);
     if (!targetUser) return;
 
     // 1. Security Role Check
@@ -2965,8 +2974,12 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                       }
 
                       return finalUsersList.map((u, uIdx) => {
-                        const storedUserId = u.username || u.id;
-                        const mappedMobile = u.mobile || 'Not Provided';
+                        const storedUserId = (u.email?.toLowerCase() === 'dahalkomal@gmail.com' || u.id === 'Super_Admin' || u.id?.toLowerCase().startsWith('su-dahalkomal'))
+                          ? 'Super_Admin'
+                          : (u.username || u.id);
+                        const mappedMobile = (u.email?.toLowerCase() === 'dahalkomal@gmail.com' || u.id === 'Super_Admin' || u.id?.toLowerCase().startsWith('su-dahalkomal'))
+                          ? (u.mobile && u.mobile !== 'Not Provided' ? u.mobile : '9842033214')
+                          : (u.mobile || 'Not Provided');
                         let mappedPost = u.post || (u.role === 'superuser' ? 'System Controller' : u.role === 'admin' ? 'Lead IT Controller' : 'Computer Operator');
                         if (u.role === 'superuser' && (mappedPost === 'Lead IT Controller' || !mappedPost)) {
                           mappedPost = 'System Controller';
@@ -3044,7 +3057,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                               <div className="flex flex-col space-y-0.5 font-normal text-[12px] uppercase">
                                 {u.role === 'superuser' ? (
                                   <span className="bg-amber-500/10 text-amber-500 border border-amber-500/30 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit uppercase tracking-wider leading-none whitespace-nowrap">
-                                    👑 Owner Admin
+                                    👑 Super Admin
                                   </span>
                                 ) : u.role === 'admin' ? (
                                   <span className="bg-cyan-500/10 text-cyan-500 border border-cyan-500/30 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit uppercase tracking-wider leading-none whitespace-nowrap">
@@ -3122,7 +3135,17 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => handleResetPassword(u)}
+                                        onClick={() => {
+                                          const isSuperOrAdmin = u.role === 'superuser' || u.role === 'admin' || u.id === 'Super_Admin';
+                                          const defaultPass = isSuperOrAdmin ? 'Itahari@PLSMS2083' : 'Itahari@2026';
+                                          setResetModalState({
+                                            show: true,
+                                            user: u,
+                                            customPassword: defaultPass,
+                                            forceChange: true,
+                                            successPasswordInfo: null,
+                                          });
+                                        }}
                                         className="font-semibold px-2.5 py-1 rounded-md text-[10px] transition-all uppercase border leading-none tracking-wider select-none flex items-center gap-1 shrink-0 whitespace-nowrap bg-cyan-500/10 text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/20 cursor-pointer active:scale-95"
                                         title="Trigger a temporary password reset"
                                       >
@@ -3131,7 +3154,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => handleDeleteUserRole(u.id)}
+                                        onClick={() => handleDeleteUserRole(u.id, u)}
                                         className="font-semibold px-2.5 py-1 rounded-md text-[10px] transition-all uppercase border leading-none tracking-wider select-none whitespace-nowrap bg-rose-500/10 text-rose-500 border-rose-500/30 hover:bg-rose-500/20 cursor-pointer active:scale-95"
                                         title="Revoke / delete this role mapping"
                                       >
