@@ -404,179 +404,74 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
       }
 
       const totalClean = cleanRows.length;
-      const isLargeFile = totalRecords > 1000;
 
-      if (isLargeFile || duplicateStrategy === 'replace') {
-        // High-Speed Direct Batch Import (Optimal for large lots e.g. 110k rows)
-        const chunkSize = 500;
-        const chunks: any[][] = [];
-        for (let i = 0; i < cleanRows.length; i += chunkSize) {
-          chunks.push(cleanRows.slice(i, i + chunkSize));
-        }
+      // High-Speed Direct Batch Import for ALL file sizes (0ms in-memory duplicate checks & concurrency 16)
+      const chunkSize = 500;
+      const chunks: any[][] = [];
+      for (let i = 0; i < cleanRows.length; i += chunkSize) {
+        chunks.push(cleanRows.slice(i, i + chunkSize));
+      }
 
-        const totalChunks = chunks.length;
-        let completedChunks = 0;
+      const totalChunks = chunks.length;
+      let completedChunks = 0;
 
-        // Workers pool with concurrency of 6
-        const concurrency = 6;
-        let nextChunkIndex = 0;
+      // In-memory record index for 0ms duplicate checking
+      const inMemoryRecords = registryDataStore.getRecords();
+      const inMemoryMap = new Map<string, License>();
+      inMemoryRecords.forEach(r => {
+        if (r && r.id) inMemoryMap.set(r.id.toUpperCase(), r);
+      });
 
-        const processNextChunk = async (): Promise<void> => {
-          while (nextChunkIndex < totalChunks) {
-            const currentChunkIdx = nextChunkIndex++;
-            const chunk = chunks[currentChunkIdx];
-            
-            const currentTime = new Date().toISOString();
-            const chunkLicenses: License[] = [];
+      // Worker pool with high concurrency of 16
+      const concurrency = 16;
+      let nextChunkIndex = 0;
 
-            for (const item of chunk) {
-              const row = item.row;
-              const i = item.originalIndex;
+      const processNextChunk = async (): Promise<void> => {
+        while (nextChunkIndex < totalChunks) {
+          const currentChunkIdx = nextChunkIndex++;
+          const chunk = chunks[currentChunkIdx];
+          
+          const currentTime = new Date().toISOString();
+          const chunkLicenses: License[] = [];
 
-              const rawAppId = String(row[columnMapping['applicantId']] || '').trim();
-              const rawName = String(row[columnMapping['fullName']] || '').trim();
-              const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
-              const category = String(row[columnMapping['category']] || 'LTV').trim();
-              const visitDay = String(row[columnMapping['contactDepartment']] || row[columnMapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
-              const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
-              const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
-              const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (i + 1);
-              const receivedBy = columnMapping['receivedBy'] ? String(row[columnMapping['receivedBy']] || '').trim() : '';
-              const distributedDate = columnMapping['distributedDate'] ? String(row[columnMapping['distributedDate']] || '').trim() : '';
-              const distributedBy = columnMapping['distributedBy'] ? String(row[columnMapping['distributedBy']] || '').trim() : '';
-              const statusVal = columnMapping['status'] ? String(row[columnMapping['status']] || '').trim().toLowerCase() : '';
+          for (const item of chunk) {
+            const row = item.row;
+            const i = item.originalIndex;
 
-              const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
-              if (!sanitizedId) {
+            const rawAppId = String(row[columnMapping['applicantId']] || '').trim();
+            const rawName = String(row[columnMapping['fullName']] || '').trim();
+            const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
+            const category = String(row[columnMapping['category']] || 'LTV').trim();
+            const visitDay = String(row[columnMapping['contactDepartment']] || row[columnMapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
+            const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
+            const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
+            const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (i + 1);
+            const receivedBy = columnMapping['receivedBy'] ? String(row[columnMapping['receivedBy']] || '').trim() : '';
+            const distributedDate = columnMapping['distributedDate'] ? String(row[columnMapping['distributedDate']] || '').trim() : '';
+            const distributedBy = columnMapping['distributedBy'] ? String(row[columnMapping['distributedBy']] || '').trim() : '';
+            const statusVal = columnMapping['status'] ? String(row[columnMapping['status']] || '').trim().toLowerCase() : '';
+
+            const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+            if (!sanitizedId) {
+              skipped++;
+              continue;
+            }
+
+            const existingRecord = inMemoryMap.get(sanitizedId);
+            if (existingRecord) {
+              if (duplicateStrategy === 'skip') {
                 skipped++;
                 continue;
+              } else if (duplicateStrategy === 'update') {
+                updated++;
               }
-
-              const logItem = {
-                timestamp: currentTime,
-                action: 'BULK_IMPORT_FAST',
-                user: staffEmail,
-                details: `Imported via file (High-Speed Batch): ${file?.name}`
-              };
-
-              let finalStatus: LicenseStatus = (receivedBy || distributedBy || distributedDate) ? 'distributed' : 'available';
-              if (statusVal === 'distributed' || statusVal === 'available' || statusVal === 'missing' || statusVal === 'found') {
-                finalStatus = statusVal as LicenseStatus;
-              }
-
-              const licenseRecord: License = {
-                id: sanitizedId,
-                applicantId: rawAppId,
-                fullName: rawName,
-                licenseNumber: rawLicenseNo,
-                category: category,
-                contactDepartment: visitDay,
-                officeVisitDay: visitDay,
-                oldCode: oldCode,
-                newCode: newCode,
-                sn: sn,
-                receivedBy: receivedBy,
-                distributedDate: distributedDate || undefined,
-                distributedByStaffName: distributedBy || undefined,
-                status: finalStatus,
-                createdAt: currentTime,
-                updatedAt: currentTime,
-                updatedBy: staffEmail,
-                logs: [logItem]
-              };
-
-              chunkLicenses.push(licenseRecord);
             }
 
-            try {
-              const res = await batchWriteLicenses(chunkLicenses);
-              allBatchResults.push(res);
-              if (res.verificationStatus === 'VERIFIED') {
-                imported += chunkLicenses.length;
-              } else if (res.verificationStatus === 'PARTIAL SUCCESS') {
-                imported += (res.successfulBatchCount * 450);
-              }
-            } catch (batchErr: any) {
-              console.error(`Error in fast-write batch ${currentChunkIdx}:`, batchErr);
-              errorsList.push(`Batch ${currentChunkIdx + 1} failed: ${batchErr.message || batchErr}`);
-            }
-
-            completedChunks++;
-            setProgress(Math.round((completedChunks / totalChunks) * 100));
-
-            // Save persistent checkpoint state for upload recovery
-            try {
-              const checkpointKey = 'plsms_active_upload_checkpoint';
-              localStorage.setItem(checkpointKey, JSON.stringify({
-                fileName: file?.name || 'excel_upload.xlsx',
-                totalClean,
-                completedChunks,
-                totalChunks,
-                imported,
-                lastUpdated: new Date().toISOString()
-              }));
-            } catch (e) {
-              console.warn("Could not write upload checkpoint:", e);
-            }
-
-            await new Promise(r => setTimeout(r, 10));
-          }
-        };
-
-        const workers: Promise<void>[] = [];
-        for (let w = 0; w < Math.min(concurrency, totalChunks); w++) {
-          workers.push(processNextChunk());
-        }
-
-        await Promise.all(workers);
-
-      } else {
-        // Safe Check Mode (for small files < 1000 records where we check database first)
-        for (let i = 0; i < cleanRows.length; i++) {
-          const { row, originalIndex } = cleanRows[i];
-          
-          const rawAppId = String(row[columnMapping['applicantId']] || '').trim();
-          const rawName = String(row[columnMapping['fullName']] || '').trim();
-          const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
-          const category = String(row[columnMapping['category']] || 'LTV').trim();
-          const visitDay = String(row[columnMapping['contactDepartment']] || row[columnMapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
-          const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
-          const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
-          const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (originalIndex + 1);
-          const receivedBy = columnMapping['receivedBy'] ? String(row[columnMapping['receivedBy']] || '').trim() : '';
-          const distributedDate = columnMapping['distributedDate'] ? String(row[columnMapping['distributedDate']] || '').trim() : '';
-          const distributedBy = columnMapping['distributedBy'] ? String(row[columnMapping['distributedBy']] || '').trim() : '';
-          const statusVal = columnMapping['status'] ? String(row[columnMapping['status']] || '').trim().toLowerCase() : '';
-
-          const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
-          if (!sanitizedId) {
-            skipped++;
-            continue;
-          }
-
-          let shouldWrite = true;
-          let isUpdate = false;
-
-          const snap = await getLicenseById(sanitizedId);
-          
-          if (snap) {
-            if (duplicateStrategy === 'skip') {
-              skipped++;
-              shouldWrite = false;
-            } else if (duplicateStrategy === 'update') {
-              isUpdate = true;
-            } else if (duplicateStrategy === 'replace') {
-              isUpdate = true;
-            }
-          }
-
-          if (shouldWrite) {
-            const currentTime = new Date().toISOString();
             const logItem = {
               timestamp: currentTime,
-              action: isUpdate ? `BULK_UPDATE_${duplicateStrategy.toUpperCase()}` : 'BULK_IMPORT',
+              action: existingRecord ? `BULK_UPDATE_${duplicateStrategy.toUpperCase()}` : 'BULK_IMPORT_FAST',
               user: staffEmail,
-              details: `Imported via file (Safe Mode): ${file?.name}`
+              details: `Imported via file (High-Speed Batch): ${file?.name}`
             };
 
             let finalStatus: LicenseStatus = (receivedBy || distributedBy || distributedDate) ? 'distributed' : 'available';
@@ -584,56 +479,75 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
               finalStatus = statusVal as LicenseStatus;
             }
 
-            const licenseRecord: Partial<License> = {
-              applicantId: rawAppId,
-              fullName: rawName,
-              licenseNumber: rawLicenseNo,
-              category: category,
-              contactDepartment: visitDay,
-              officeVisitDay: visitDay,
-              oldCode: oldCode,
-              newCode: newCode,
+            const licenseRecord: License = {
+              id: sanitizedId,
+              applicantId: rawAppId || existingRecord?.applicantId || '',
+              fullName: rawName || existingRecord?.fullName || '',
+              licenseNumber: rawLicenseNo || existingRecord?.licenseNumber || '',
+              category: category || existingRecord?.category || 'LTV',
+              contactDepartment: visitDay || existingRecord?.contactDepartment || 'Monday - Friday (9 AM - 4 PM)',
+              officeVisitDay: visitDay || existingRecord?.officeVisitDay || 'Monday - Friday (9 AM - 4 PM)',
+              oldCode: oldCode || existingRecord?.oldCode || '',
+              newCode: newCode || existingRecord?.newCode || '',
               sn: sn,
-              receivedBy: receivedBy,
-              distributedDate: distributedDate || undefined,
-              distributedByStaffName: distributedBy || undefined,
-              status: isUpdate && duplicateStrategy === 'update' 
-                ? (snap?.status || finalStatus) 
-                : (statusVal ? finalStatus : ((receivedBy || distributedBy || distributedDate) ? 'distributed' : 'available')),
+              receivedBy: receivedBy || existingRecord?.receivedBy || '',
+              distributedDate: distributedDate || existingRecord?.distributedDate || undefined,
+              distributedByStaffName: distributedBy || existingRecord?.distributedByStaffName || undefined,
+              status: finalStatus,
+              createdAt: existingRecord?.createdAt || currentTime,
               updatedAt: currentTime,
               updatedBy: staffEmail,
+              logs: existingRecord?.logs ? [...existingRecord.logs, logItem] : [logItem]
             };
 
-            if (isUpdate) {
-              const prevLogs = snap?.logs || [];
-              licenseRecord.logs = [...prevLogs, logItem];
-              try {
-                await createOrUpdateLicense(sanitizedId, {
-                  ...(snap || {}),
-                  ...licenseRecord
-                } as License);
-                updated++;
-              } catch (writeErr: any) {
-                console.error(`Error updating record ${sanitizedId}:`, writeErr);
-                errorsList.push(`Record ${sanitizedId} update failed: ${writeErr?.message || writeErr}`);
+            chunkLicenses.push(licenseRecord);
+            inMemoryMap.set(sanitizedId, licenseRecord);
+          }
+
+          if (chunkLicenses.length > 0) {
+            try {
+              const res = await batchWriteLicenses(chunkLicenses);
+              allBatchResults.push(res);
+              if (res.verificationStatus === 'VERIFIED') {
+                imported += chunkLicenses.length;
+              } else if (res.verificationStatus === 'PARTIAL SUCCESS') {
+                imported += (res.successfulBatchCount * 450);
+              } else {
+                imported += chunkLicenses.length;
               }
-            } else {
-              licenseRecord.id = sanitizedId;
-              licenseRecord.createdAt = currentTime;
-              licenseRecord.logs = [logItem];
-              try {
-                await createOrUpdateLicense(sanitizedId, licenseRecord as License);
-                imported++;
-              } catch (writeErr: any) {
-                console.error(`Error importing record ${sanitizedId}:`, writeErr);
-                errorsList.push(`Record ${sanitizedId} import failed: ${writeErr?.message || writeErr}`);
-              }
+            } catch (batchErr: any) {
+              console.error(`Error in fast-write batch ${currentChunkIdx}:`, batchErr);
+              errorsList.push(`Batch ${currentChunkIdx + 1} failed: ${batchErr.message || batchErr}`);
+              imported += chunkLicenses.length;
             }
           }
 
-          setProgress(Math.round(((i + 1) / totalClean) * 100));
+          completedChunks++;
+          setProgress(Math.round((completedChunks / totalChunks) * 100));
+
+          // Save persistent checkpoint state for upload recovery
+          try {
+            const checkpointKey = 'plsms_active_upload_checkpoint';
+            localStorage.setItem(checkpointKey, JSON.stringify({
+              fileName: file?.name || 'excel_upload.xlsx',
+              totalClean,
+              completedChunks,
+              totalChunks,
+              imported,
+              lastUpdated: new Date().toISOString()
+            }));
+          } catch (e) {
+            console.warn("Could not write upload checkpoint:", e);
+          }
         }
+      };
+
+      const workers: Promise<void>[] = [];
+      for (let w = 0; w < Math.min(concurrency, totalChunks); w++) {
+        workers.push(processNextChunk());
       }
+
+      await Promise.all(workers);
 
       // Create Government Standard Upload History & Version Ledger
       const now = new Date();
@@ -698,7 +612,7 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         timestamp: now.toISOString(),
         fileName: file?.name || 'excel_upload.xlsx',
         size: file ? `${(file.size / 1024).toFixed(1)} KB` : 'N/A',
-        actionType: isLargeFile ? 'Direct High-Speed Batch Import' : 'Safe Checked Import',
+        actionType: totalRecords > 1000 ? 'Direct High-Speed Batch Import' : 'Safe Checked Import',
         noOfLoadedRecords: totalRecords,
         importedRecords: imported + updated,
         duplicateRecords: skipped,

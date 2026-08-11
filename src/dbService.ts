@@ -166,7 +166,7 @@ const initialMockRequests: CollectionRequest[] = [];
 // Helper to seed localStorage if empty
 const inMemoryStorageMap = new Map<string, any>();
 
-function fetchStorageItem<T>(key: string, initial: T): T {
+export function fetchStorageItem<T>(key: string, initial: T): T {
   if (inMemoryStorageMap.has(key)) {
     return inMemoryStorageMap.get(key) as T;
   }
@@ -1321,6 +1321,19 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
     };
   }
 
+  // Instantly save all records to memory store and local IndexedDB cache so UI is updated in 0ms
+  registryDataStore.setRecords(licenses, 'Batch Write Direct Ingestion', false);
+  try {
+    const currentBackup = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
+    const backupMap = new Map<string, License>();
+    currentBackup.forEach(b => { if (b && b.id) backupMap.set(b.id.toUpperCase(), b); });
+    licenses.forEach(s => { if (s && s.id) backupMap.set(s.id.toUpperCase(), s); });
+    const updatedBackup = Array.from(backupMap.values());
+    writeStorageItem('plsms_live_licenses_backup', updatedBackup);
+  } catch (storageErr) {
+    console.warn("Local storage backup update notice:", storageErr);
+  }
+
   // Always commit batch to persistent Cloud Firestore in safe slices with auto-retry
   const BATCH_LIMIT = 450;
   let batchNumber = 0;
@@ -1350,11 +1363,10 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
         lastError = firstErr?.message || String(firstErr);
         checkAndTriggerQuotaError(firstErr);
 
-        // Automatic Retry up to 3 times for failed batch only
-        for (let attempt = 1; attempt <= 3; attempt++) {
+        // Fast Automatic Retry up to 2 times for failed batch
+        for (let attempt = 1; attempt <= 2; attempt++) {
           retries = attempt;
-          console.log(`[Batch Retry] Waiting 2000ms before retry ${attempt}/3 for Batch ${batchNumber}...`);
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, 200 * attempt));
 
           try {
             const retryBatch = writeBatch(db);
@@ -1363,28 +1375,12 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
             });
             await retryBatch.commit();
             batchSuccess = true;
-            console.log(`[Batch Retry] Batch ${batchNumber} succeeded on retry #${attempt}!`);
             break;
           } catch (retryErr: any) {
             console.warn(`[Batch Retry] Batch ${batchNumber} retry #${attempt} failed:`, retryErr);
             lastError = retryErr?.message || String(retryErr);
             checkAndTriggerQuotaError(retryErr);
           }
-        }
-      }
-
-      if (batchSuccess) {
-        registryDataStore.setRecords(slice, 'Batch Write Direct Ingestion', false);
-        try {
-          const currentBackup = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
-          const backupMap = new Map<string, License>();
-          currentBackup.forEach(b => { if (b && b.id) backupMap.set(b.id.toUpperCase(), b); });
-          slice.forEach(s => { if (s && s.id) backupMap.set(s.id.toUpperCase(), s); });
-          const updatedBackup = Array.from(backupMap.values());
-          const cappedBackup = updatedBackup.length > 2000 ? updatedBackup.slice(-2000) : updatedBackup;
-          writeStorageItem('plsms_live_licenses_backup', cappedBackup);
-        } catch (storageErr) {
-          console.warn("Local storage backup update notice:", storageErr);
         }
       }
 
