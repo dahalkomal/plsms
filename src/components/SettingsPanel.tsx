@@ -446,6 +446,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   const [ledgersLoading, setLedgersLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatusMsg, setUploadStatusMsg] = useState('');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   
   // Disaster Recovery states
@@ -1173,14 +1174,6 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           setUploadProgress(100);
         } else {
           // High-Speed Concurrent Batch Ingestion (Handles up to 200,000+ records in seconds)
-          const chunkSize = 450;
-          const writeChunks: any[][] = [];
-          for (let i = 0; i < validRows.length; i += chunkSize) {
-            writeChunks.push(validRows.slice(i, i + chunkSize));
-          }
-
-          const totalWriteChunks = writeChunks.length;
-          let writeChunksCompleted = 0;
           const fileSeenLicenseNos = new Set<string>();
 
           // Pre-seed duplicate check set from in-memory registryDataStore for 0ms network latency
@@ -1200,7 +1193,10 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           const currentTime = new Date().toISOString();
           const allPreparedLicenses: License[] = [];
 
-          // 1. Prepare all record objects in memory & update local memory store instantly
+          setUploadProgress(25);
+          setUploadStatusMsg('Preparing records and detecting duplicates in memory...');
+
+          // 1. Prepare all record objects in memory
           for (const item of validRows) {
             const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, visitDay, receivedBy, sn } = item;
             const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
@@ -1246,22 +1242,34 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             allPreparedLicenses.push(licenseRecord);
           }
 
-          // Instantly sync memory store and local IndexedDB cache so records are live immediately
+          // Instantly sync memory store and local IndexedDB cache once in 0ms
           try {
             registryDataStore.setRecords(allPreparedLicenses, 'Lot File Ingestion', false);
             const currentBackup = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
             const backupMap = new Map<string, License>();
             currentBackup.forEach(b => { if (b && b.id) backupMap.set(b.id.toUpperCase(), b); });
             allPreparedLicenses.forEach(s => { if (s && s.id) backupMap.set(s.id.toUpperCase(), s); });
-            writeStorageItem('plsms_live_licenses_backup', Array.from(backupMap.values()));
+            const updatedBackup = Array.from(backupMap.values());
+            const cappedBackup = updatedBackup.length > 2000 ? updatedBackup.slice(-2000) : updatedBackup;
+            writeStorageItem('plsms_live_licenses_backup', cappedBackup);
           } catch (memErr) {
             console.warn("Local memory store update notice:", memErr);
           }
 
           setUploadProgress(30);
 
-          // 2. Parallel worker pool with concurrency of 16 for ultra-fast Firestore batch writes
-          const concurrency = 16;
+          // 2. High-Speed Direct Batch Ingestion into Firestore using prepared License objects directly in O(1)
+          const chunkSize = 450;
+          const writeChunks: License[][] = [];
+          for (let i = 0; i < allPreparedLicenses.length; i += chunkSize) {
+            writeChunks.push(allPreparedLicenses.slice(i, i + chunkSize));
+          }
+
+          const totalWriteChunks = writeChunks.length;
+          let writeChunksCompleted = 0;
+
+          // Parallel worker pool with concurrency of 8 for optimal Firestore throughput
+          const concurrency = 8;
           let nextChunkIdx = 0;
 
           const processNextWriteChunk = async (): Promise<void> => {
@@ -1270,24 +1278,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               const chunk = writeChunks[currentCIdx];
               const batch = writeBatch(db);
 
-              for (const item of chunk) {
-                const sanitizedId = item.rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
-                const targetDocRef = doc(db, 'licenses', sanitizedId);
-                
-                // Find matching record
-                const rec = allPreparedLicenses.find(p => p.id === sanitizedId) || {
-                  id: sanitizedId,
-                  applicantId: item.rawAppId,
-                  fullName: item.rawName,
-                  licenseNumber: item.rawLicenseNo,
-                  category: item.category,
-                  contactDepartment: item.visitDay,
-                  officeVisitDay: item.visitDay,
-                  status: item.receivedBy ? 'distributed' : 'available',
-                  updatedAt: currentTime,
-                  updatedBy: uploaderEmail
-                };
-
+              for (const rec of chunk) {
+                const targetDocRef = doc(db, 'licenses', rec.id);
                 batch.set(targetDocRef, rec);
               }
 
@@ -1299,8 +1291,10 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               }
 
               writeChunksCompleted++;
-              const progressPct = 30 + Math.round((writeChunksCompleted / totalWriteChunks) * 70);
-              setUploadProgress(Math.min(99, progressPct));
+              const progressPct = 30 + Math.round((writeChunksCompleted / totalWriteChunks) * 65);
+              const processedCount = Math.min(writeChunksCompleted * chunkSize, allPreparedLicenses.length);
+              setUploadProgress(Math.min(95, progressPct));
+              setUploadStatusMsg(`Writing batch ${writeChunksCompleted} of ${totalWriteChunks} (${processedCount} / ${allPreparedLicenses.length} records)...`);
             }
           };
 
@@ -1310,7 +1304,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           }
 
           await Promise.all(workers);
-          setUploadProgress(100);
+          setUploadProgress(98);
+          setUploadStatusMsg('Finalizing upload ledger & updating live database registry...');
         }
 
         // Create the ledger entry
@@ -4560,7 +4555,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                       {uploadLoading && (
                         <div className="space-y-1.5 p-4 rounded-xl bg-slate-900/30 border border-slate-800/40">
                           <div className="flex items-center justify-between text-[11px] font-bold">
-                            <span className="text-emerald-400 animate-pulse">Appending lot records to live database registry...</span>
+                            <span className="text-emerald-400 animate-pulse">{uploadStatusMsg || 'Appending lot records to live database registry...'}</span>
                             <span>{uploadProgress}%</span>
                           </div>
                           <div className={`w-full h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>

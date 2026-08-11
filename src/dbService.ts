@@ -1329,7 +1329,8 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
     currentBackup.forEach(b => { if (b && b.id) backupMap.set(b.id.toUpperCase(), b); });
     licenses.forEach(s => { if (s && s.id) backupMap.set(s.id.toUpperCase(), s); });
     const updatedBackup = Array.from(backupMap.values());
-    writeStorageItem('plsms_live_licenses_backup', updatedBackup);
+    const cappedBackup = updatedBackup.length > 2000 ? updatedBackup.slice(-2000) : updatedBackup;
+    writeStorageItem('plsms_live_licenses_backup', cappedBackup);
   } catch (storageErr) {
     console.warn("Local storage backup update notice:", storageErr);
   }
