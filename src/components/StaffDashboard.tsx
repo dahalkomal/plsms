@@ -194,6 +194,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   // Reports state
   const [activeReportType, setActiveReportType] = useState<'available' | 'distributed' | 'missing' | 'found' | 'requests'>('available');
   const [reportData, setReportData] = useState<any[]>([]);
+  const [isExportingReport, setIsExportingReport] = useState(false);
 
   // Integrated Report states
   const [officeSettings, setOfficeSettings] = useState<any>(null);
@@ -827,8 +828,9 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       return;
     }
 
+    setIsExportingReport(true);
     try {
-      showExportNotification("Preparing Integrated Report...", "info");
+      showExportNotification("Fetching current database records...", "info");
 
       const recordsMap = await fetchIntegratedReportData({
         selectedKeys,
@@ -838,6 +840,8 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         onStatusUpdate: (msg) => showExportNotification(msg, "info")
       });
 
+      showExportNotification("Generating report...", "info");
+
       await exportIntegratedReportToExcel({
         selectedKeys,
         recordsMap,
@@ -846,10 +850,12 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         onProgressStatus: (msg) => showExportNotification(msg, "info")
       });
 
-      showExportNotification("Report generated successfully.", "success");
+      showExportNotification("Download ready.", "success");
     } catch (err: any) {
       console.error("Failed to generate integrated report:", err);
-      showExportNotification(err.message || "Failed to generate integrated report.", "warning");
+      showExportNotification(err.message || "Unable to retrieve current database data. Please try again.", "warning");
+    } finally {
+      setIsExportingReport(false);
     }
   };
 
@@ -858,33 +864,33 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
     if (type === 'requests') {
       try {
         const liveRequests = await getAllCollectionRequests();
-        records = liveRequests && liveRequests.length > 0 ? liveRequests : collectionRequests;
+        records = Array.isArray(liveRequests) ? liveRequests : [];
       } catch (err) {
         console.warn("Firestore collection requests fetch warning:", err);
-        records = collectionRequests;
+        throw new Error("Unable to retrieve current database data. Please try again.");
       }
     } else if (type === 'upload_history') {
       try {
         const liveLedgers = await getAllUploadLedgers();
-        records = liveLedgers && liveLedgers.length > 0 ? liveLedgers : uploadLedgers;
+        records = Array.isArray(liveLedgers) ? liveLedgers : [];
       } catch (err) {
         console.warn("Firestore upload history fetch warning:", err);
-        records = uploadLedgers;
+        throw new Error("Unable to retrieve current database data. Please try again.");
       }
     } else {
       let licsToFilter: any[] = [];
       try {
         const liveLicenses = await getAllLicenses();
-        licsToFilter = liveLicenses && liveLicenses.length > 0 ? liveLicenses : getLiveProcessedLicenses();
+        licsToFilter = Array.isArray(liveLicenses) ? liveLicenses : [];
       } catch (err) {
         console.warn("Firestore licenses fetch warning:", err);
-        licsToFilter = getLiveProcessedLicenses();
+        throw new Error("Unable to retrieve current database data. Please try again.");
       }
 
       if (type === 'distributed') {
-        records = licsToFilter.filter(l => isLicenseDistributed(l) && l.status !== 'missing');
+        records = licsToFilter.filter(l => (l.status === 'distributed' || isLicenseDistributed(l)) && l.status !== 'missing' && l.status !== 'found');
       } else if (type === 'notDistributed') {
-        records = licsToFilter.filter(l => (!isLicenseDistributed(l) && l.status !== 'found') || l.status === 'missing');
+        records = licsToFilter.filter(l => !isLicenseDistributed(l) && l.status !== 'distributed' && l.status !== 'missing' && l.status !== 'found');
       } else if (type === 'available') {
         records = licsToFilter;
       } else if (type === 'missing') {
@@ -910,66 +916,69 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   };
 
   const handleExportExcelReport = async (type: string) => {
-    showExportNotification("Preparing Report...", "info");
+    if (isExportingReport) return;
+    setIsExportingReport(true);
+    showExportNotification("Fetching current database records...", "info");
     try {
       const records = await fetchFreshRecordsForType(type);
-      if (!records || records.length === 0) {
-        showExportNotification("No matching records found for this report.", "warning");
-        return;
-      }
+      showExportNotification("Generating report...", "info");
       const title = reportTitles[type] || `${type.toUpperCase()} Report`;
       await exportReportToExcel({
         reportTitle: title,
         sheetName: title.substring(0, 31),
-        records,
+        records: records || [],
         reportType: type
       });
-      showExportNotification("Report generated successfully.", "success");
-    } catch (err) {
+      showExportNotification("Download ready.", "success");
+    } catch (err: any) {
       console.error("Export Excel error:", err);
-      showExportNotification("Failed to generate report.", "warning");
+      showExportNotification(err.message || "Unable to retrieve current database data. Please try again.", "warning");
+    } finally {
+      setIsExportingReport(false);
     }
   };
 
   const handleExportPdfReport = async (type: string) => {
-    showExportNotification("Preparing Report...", "info");
+    if (isExportingReport) return;
+    setIsExportingReport(true);
+    showExportNotification("Fetching current database records...", "info");
     try {
       const records = await fetchFreshRecordsForType(type);
-      if (!records || records.length === 0) {
-        showExportNotification("No matching records found for this report.", "warning");
-        return;
-      }
+      showExportNotification("Generating report...", "info");
       const title = reportTitles[type] || `${type.toUpperCase()} Report`;
       await exportReportToPdf({
         reportTitle: title,
-        records,
+        records: records || [],
         reportType: type
       });
-      showExportNotification("Report generated successfully.", "success");
-    } catch (err) {
+      showExportNotification("Download ready.", "success");
+    } catch (err: any) {
       console.error("Export PDF error:", err);
-      showExportNotification("Failed to generate report.", "warning");
+      showExportNotification(err.message || "Unable to retrieve current database data. Please try again.", "warning");
+    } finally {
+      setIsExportingReport(false);
     }
   };
 
   const handleExportCSVReport = async (type: string) => {
-    showExportNotification("Preparing Report...", "info");
+    if (isExportingReport) return;
+    setIsExportingReport(true);
+    showExportNotification("Fetching current database records...", "info");
     try {
       const records = await fetchFreshRecordsForType(type);
-      if (!records || records.length === 0) {
-        showExportNotification("No matching records found for this report.", "warning");
-        return;
-      }
+      showExportNotification("Generating report...", "info");
       const title = reportTitles[type] || `${type.toUpperCase()} Report`;
       await exportReportToCsv({
         reportTitle: title,
-        records,
+        records: records || [],
         reportType: type
       });
-      showExportNotification("Report generated successfully.", "success");
-    } catch (err) {
+      showExportNotification("Download ready.", "success");
+    } catch (err: any) {
       console.error("Export CSV error:", err);
-      showExportNotification("Failed to generate report.", "warning");
+      showExportNotification(err.message || "Unable to retrieve current database data. Please try again.", "warning");
+    } finally {
+      setIsExportingReport(false);
     }
   };
 
@@ -1138,16 +1147,16 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
-                    disabled={!canExportCsv}
+                    disabled={!canExportCsv || isExportingReport}
                     onClick={() => handleExportExcelReport(rep.id as any)}
                     className={`p-1.5 rounded-lg border transition-all ${
-                      canExportCsv
+                      canExportCsv && !isExportingReport
                         ? (isDark 
                             ? "text-slate-400 hover:text-emerald-400 bg-slate-900 border-slate-805 hover:border-emerald-990/40 cursor-pointer hover:scale-105 active:scale-95 duration-100" 
                             : "text-emerald-800 hover:text-emerald-950 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer hover:scale-105 active:scale-95 duration-100")
                         : (isDark 
-                            ? "text-slate-650 bg-slate-955 border-slate-905 cursor-not-allowed" 
-                            : "text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed")
+                            ? "text-slate-650 bg-slate-955 border-slate-905 cursor-not-allowed opacity-50" 
+                            : "text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed opacity-50")
                     }`}
                     title={canExportCsv ? "Download Official Excel (.xlsx) Report" : "Export features are restricted for your account role by the administrator"}
                   >
@@ -1155,16 +1164,16 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                   </button>
                   <button
                     type="button"
-                    disabled={!canExportCsv}
+                    disabled={!canExportCsv || isExportingReport}
                     onClick={() => handleExportPdfReport(rep.id as any)}
                     className={`p-1.5 rounded-lg border transition-all ${
-                      canExportCsv
+                      canExportCsv && !isExportingReport
                         ? (isDark 
                             ? "text-slate-400 hover:text-rose-400 bg-slate-900 border-slate-805 hover:border-rose-990/40 cursor-pointer hover:scale-105 active:scale-95 duration-100" 
                             : "text-rose-800 hover:text-rose-950 bg-rose-50 border-rose-300 hover:bg-rose-100 cursor-pointer hover:scale-105 active:scale-95 duration-100")
                         : (isDark 
-                            ? "text-slate-650 bg-slate-955 border-slate-905 cursor-not-allowed" 
-                            : "text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed")
+                            ? "text-slate-650 bg-slate-955 border-slate-905 cursor-not-allowed opacity-50" 
+                            : "text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed opacity-50")
                     }`}
                     title={canExportCsv ? "Download Official PDF (.pdf) Report" : "Export features are restricted for your account role by the administrator"}
                   >
@@ -1172,16 +1181,16 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                   </button>
                   <button
                     type="button"
-                    disabled={!canExportCsv}
+                    disabled={!canExportCsv || isExportingReport}
                     onClick={() => handleExportCSVReport(rep.id as any)}
                     className={`p-1.5 rounded-lg border transition-all ${
-                      canExportCsv
+                      canExportCsv && !isExportingReport
                         ? (isDark 
                             ? "text-slate-400 hover:text-cyan-400 bg-slate-900 border-slate-805 hover:border-cyan-990/40 cursor-pointer hover:scale-105 active:scale-95 duration-100" 
                             : "text-blue-800 hover:text-blue-950 bg-blue-50 border-blue-300 hover:bg-blue-100 cursor-pointer hover:scale-105 active:scale-95 duration-100")
                         : (isDark 
-                            ? "text-slate-650 bg-slate-955 border-slate-905 cursor-not-allowed" 
-                            : "text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed")
+                            ? "text-slate-650 bg-slate-955 border-slate-905 cursor-not-allowed opacity-50" 
+                            : "text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed opacity-50")
                     }`}
                     title={canExportCsv ? "Download CSV Sheet" : "Export features are restricted for your account role by the administrator"}
                   >
@@ -1292,15 +1301,18 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
               <div className="flex justify-end">
                 <button
                   type="button"
+                  disabled={isExportingReport}
                   onClick={handleGenerateIntegratedReport}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-black tracking-wide shadow-md transition-all active:scale-95 duration-100 flex items-center gap-2 border cursor-pointer ${
-                    isDark 
-                      ? 'bg-emerald-600 border-emerald-500 hover:bg-emerald-500 hover:border-emerald-400 text-white' 
-                      : 'bg-emerald-50 border-emerald-300 hover:bg-emerald-100 text-emerald-805 hover:text-emerald-900 font-bold'
+                  className={`px-5 py-2.5 rounded-xl text-xs font-black tracking-wide shadow-md transition-all active:scale-95 duration-100 flex items-center gap-2 border ${
+                    isExportingReport
+                      ? 'opacity-50 cursor-not-allowed bg-slate-500 border-slate-600 text-slate-200'
+                      : isDark 
+                        ? 'bg-emerald-600 border-emerald-500 hover:bg-emerald-500 hover:border-emerald-400 text-white cursor-pointer' 
+                        : 'bg-emerald-50 border-emerald-300 hover:bg-emerald-100 text-emerald-805 hover:text-emerald-900 font-bold cursor-pointer'
                   }`}
                 >
                   <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
-                  Generate Integrated Report
+                  {isExportingReport ? "Generating Report..." : "Generate Integrated Report"}
                 </button>
               </div>
             </div>
@@ -2548,10 +2560,10 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
-                  disabled={!canExportCsv}
+                  disabled={!canExportCsv || isExportingReport}
                   onClick={() => handleExportExcelReport(rep.id as any)}
                   className={`p-1.5 rounded-lg border transition-all ${
-                    canExportCsv
+                    canExportCsv && !isExportingReport
                       ? (isDark 
                           ? "text-slate-400 hover:text-emerald-400 bg-slate-900 border-slate-805 hover:border-emerald-990/40 cursor-pointer hover:scale-105 active:scale-95 duration-100" 
                           : "text-emerald-800 hover:text-emerald-950 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer hover:scale-105 active:scale-95 duration-100")
@@ -2565,10 +2577,10 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                 </button>
                 <button
                   type="button"
-                  disabled={!canExportCsv}
+                  disabled={!canExportCsv || isExportingReport}
                   onClick={() => handleExportPdfReport(rep.id as any)}
                   className={`p-1.5 rounded-lg border transition-all ${
-                    canExportCsv
+                    canExportCsv && !isExportingReport
                       ? (isDark 
                           ? "text-slate-400 hover:text-rose-400 bg-slate-900 border-slate-805 hover:border-rose-990/40 cursor-pointer hover:scale-105 active:scale-95 duration-100" 
                           : "text-rose-800 hover:text-rose-950 bg-rose-50 border-rose-300 hover:bg-rose-100 cursor-pointer hover:scale-105 active:scale-95 duration-100")
@@ -2582,10 +2594,10 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                 </button>
                 <button
                   type="button"
-                  disabled={!canExportCsv}
+                  disabled={!canExportCsv || isExportingReport}
                   onClick={() => handleExportCSVReport(rep.id as any)}
                   className={`p-1.5 rounded-lg border transition-all ${
-                    canExportCsv
+                    canExportCsv && !isExportingReport
                       ? (isDark 
                           ? "text-slate-400 hover:text-cyan-400 bg-slate-900 border-slate-805 hover:border-cyan-990/40 cursor-pointer hover:scale-105 active:scale-95 duration-100" 
                           : "text-blue-800 hover:text-blue-950 bg-blue-50 border-blue-300 hover:bg-blue-100 cursor-pointer hover:scale-105 active:scale-95 duration-100")

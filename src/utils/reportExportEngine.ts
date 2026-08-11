@@ -248,6 +248,42 @@ function formatStatus(rec: any): string {
 }
 
 /**
+ * Transforms report Excel sheets by renaming any existing "VISITING DAY" or "VISITING DATE" header to "DEPARTMENT".
+ * Applies case-insensitive and trimmed matching strictly to "VISITING DAY" and "VISITING DATE".
+ * Leaves sheets without "VISITING DAY" or "VISITING DATE" completely untouched.
+ */
+function sanitizeReportWorkbookHeaders(wb: any): void {
+  if (!wb || !wb.SheetNames || !wb.Sheets) return;
+
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
+
+    for (const cellKey of Object.keys(ws)) {
+      if (cellKey.startsWith('!')) continue;
+
+      const cell = ws[cellKey];
+      if (cell && typeof cell.v === 'string') {
+        const trimmedVal = cell.v.trim();
+        const upper = trimmedVal.toUpperCase();
+        if (upper === 'VISITING DAY' || upper === 'VISITING DATE') {
+          if (trimmedVal === 'Visiting Day' || trimmedVal === 'Visiting Date') {
+            cell.v = 'Department';
+            if (cell.w !== undefined) cell.w = 'Department';
+          } else if (trimmedVal === 'visiting day' || trimmedVal === 'visiting date') {
+            cell.v = 'department';
+            if (cell.w !== undefined) cell.w = 'department';
+          } else {
+            cell.v = 'DEPARTMENT';
+            if (cell.w !== undefined) cell.w = 'DEPARTMENT';
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
  * EXCEL EXPORT (Official Sample Template Format using xlsx-js-style)
  */
 export async function exportReportToExcel(options: ExportReportOptions): Promise<void> {
@@ -295,7 +331,7 @@ export async function exportReportToExcel(options: ExportReportOptions): Promise
       "CATEGORY",
       "OLD CODE",
       "NEW CODE",
-      "VISITING DATE",
+      "DEPARTMENT",
       "RECEIVED BY",
       "DISTRIBUTED DATE",
       "DISTRIBUTED BY",
@@ -502,6 +538,7 @@ export async function exportReportToExcel(options: ExportReportOptions): Promise
 
   utilsStyle.book_append_sheet(wb, ws, sheetName.substring(0, 31));
 
+  sanitizeReportWorkbookHeaders(wb);
   const wbout = writeStyle(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
@@ -519,12 +556,20 @@ export async function exportReportToExcel(options: ExportReportOptions): Promise
  */
 export async function exportReportToCsv(options: ExportReportOptions): Promise<void> {
   const title = (options.reportTitle || "REPORT").toUpperCase();
-  const records = options.records;
-  if (!records || records.length === 0) return;
+  const records = options.records || [];
   const userRolesList = await getAllUserRoles().catch(() => []);
 
   const isRequests = options.reportType === 'requests' || (records[0] && ('licenseHolderName' in records[0] || ('receiverName' in records[0] && !('applicantId' in records[0]))));
   const isUploadHistory = options.reportType === 'upload_history' || (records[0] && ('filename' in records[0] || 'recordCount' in records[0]));
+
+  let defaultHeaders: string[] = [];
+  if (isRequests) {
+    defaultHeaders = ["SN", "RequestId", "LicenseHolder", "LicenseNumber", "ReceiverName", "PhoneNumber", "PickupDay", "Remarks", "Status", "CreatedAt"];
+  } else if (isUploadHistory) {
+    defaultHeaders = ["SN", "LedgerId", "Filename", "RecordCount", "UploadDate", "UploadTime", "UploadedBy", "Version", "Status"];
+  } else {
+    defaultHeaders = ["SN", "ApplicantId", "FullName", "LicenseNumber", "Category", "OldCode", "NewCode", "Department", "ReceivedBy", "DistributedDate", "DistributedBy", "SubmittedDoc", "Status"];
+  }
 
   let reportRows: any[] = [];
   if (isRequests) {
@@ -573,7 +618,7 @@ export async function exportReportToCsv(options: ExportReportOptions): Promise<v
     });
   }
 
-  const headers = Object.keys(reportRows[0]);
+  const headers = reportRows.length > 0 ? Object.keys(reportRows[0]) : defaultHeaders;
   const csvLines = [
     headers.join(','),
     ...reportRows.map(row => headers.map(fieldName => {
@@ -629,7 +674,7 @@ export async function exportIntegratedReportToExcel(options: IntegratedExportOpt
     "CATEGORY",
     "OLD CODE",
     "NEW CODE",
-    "VISITING DATE",
+    "DEPARTMENT",
     "RECEIVED BY",
     "DISTRIBUTED DATE",
     "DISTRIBUTED BY",
@@ -844,6 +889,7 @@ export async function exportIntegratedReportToExcel(options: IntegratedExportOpt
   onProgressStatus?.("Downloading...");
   await new Promise(r => setTimeout(r, 20));
 
+  sanitizeReportWorkbookHeaders(wb);
   const wbout = writeStyle(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
@@ -922,7 +968,7 @@ export async function exportReportToPdf(options: ExportReportOptions): Promise<v
         "CATEGORY",
         "OLD CODE",
         "NEW CODE",
-        "VISITING DATE",
+        "DEPARTMENT",
         "RECEIVED BY",
         "DISTRIBUTED DATE",
         "DISTRIBUTED BY",

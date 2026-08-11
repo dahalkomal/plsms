@@ -80,7 +80,7 @@ export class RegistryDataStore {
    * Acts as the primary write operation for establishing the Single Source of Truth.
    */
   public setRecords(records: License[], sourceUrl?: string, forceReplace: boolean = false): void {
-    if (forceReplace) {
+    if (forceReplace || records.length === 0) {
       this.recordsMap.clear();
     }
 

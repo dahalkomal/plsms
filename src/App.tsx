@@ -293,11 +293,11 @@ export default function App() {
       // Any authenticated user logged into the application defaults to at least 'staff' level access
       return 'staff';
     }
-    return currentRole || 'public';
+    return 'public';
   }, [currentUser, currentRole]);
 
-  const isStaff = isPlsmsPath && (currentUser !== null || effectiveRole === 'staff' || effectiveRole === 'admin' || effectiveRole === 'superuser');
-  const isAdmin = isStaff && (effectiveRole === 'admin' || effectiveRole === 'superuser');
+  const isStaff = currentUser !== null && (effectiveRole === 'staff' || effectiveRole === 'admin' || effectiveRole === 'superuser');
+  const isAdmin = currentUser !== null && (effectiveRole === 'admin' || effectiveRole === 'superuser');
 
   useEffect(() => {
     if (isPlsmsPath && isStaff && activeTab === 'search') {
@@ -318,7 +318,7 @@ export default function App() {
   const [settings, setSettings] = useState<OfficeSettings>({
     officeName: "Transport Management Office, Driving License",
     officeAddress: "Itahari, Sunsari, Nepal",
-    officeLogo: "https://upload.wikimedia.org/wikipedia/commons/a/bc/Emblem_of_Nepal.svg",
+    officeLogo: "/nepal-emblem.svg",
     contactNumber: "+977-25-580121",
     emailAddress: "tmoitahari@gmail.com",
     websiteFooter: "© 2026 Transport Management Office, Driving License, Itahari, Sunsari. Authorized Use Only. All operations are logged and monitored for security compliance.",
@@ -402,18 +402,9 @@ export default function App() {
         } catch (e) {}
         setCurrentUser(user);
         resolveUserRole(user);
+        setAuthLoading(false);
       } else {
-        const cachedLiveUserStr = localStorage.getItem('plsms_live_user');
-        const isDeliberateLogout = sessionStorage.getItem('sandbox_deliberate_logout');
-        if (cachedLiveUserStr && !isDeliberateLogout) {
-          try {
-            const cachedUser = JSON.parse(cachedLiveUserStr);
-            setCurrentUser(cachedUser);
-            resolveUserRole(cachedUser);
-            return;
-          } catch (e) {}
-        }
-
+        localStorage.removeItem('plsms_live_user');
         setCurrentUser(null);
         setCurrentRole('public');
         setAuthLoading(false);
@@ -429,23 +420,36 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
 
+    // Fast safety timeout: never stay stuck on initial loading for more than 800ms
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) {
+        setSettingsLoaded(true);
+        setStatsLoaded(true);
+        setIsInitialLoading(false);
+      }
+    }, 800);
+
     const loadSettingsAndStats = async () => {
       try {
-        const [officeSet, totalServed] = await Promise.all([
+        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1000));
+        const dataPromise = Promise.all([
           getOfficeSettings(),
           getSearchesServedCount()
         ]);
-        if (isMounted) {
+
+        const result = await Promise.race([dataPromise, timeoutPromise]);
+        if (isMounted && Array.isArray(result)) {
+          const [officeSet, totalServed] = result;
           setSettings(officeSet);
           setSearchesServed(totalServed);
-          setSettingsLoaded(true);
-          setStatsLoaded(true);
         }
       } catch (err) {
         console.warn("Notice: Cached settings or statistics read notice:", err);
+      } finally {
         if (isMounted) {
           setSettingsLoaded(true);
           setStatsLoaded(true);
+          setIsInitialLoading(false);
         }
       }
     };
@@ -455,12 +459,13 @@ export default function App() {
     window.addEventListener('plsms_local_settings_changed', loadSettingsAndStats);
     return () => {
       isMounted = false;
+      clearTimeout(safetyTimer);
       window.removeEventListener('plsms_local_settings_changed', loadSettingsAndStats);
     };
   }, [demoActive]);
 
   useEffect(() => {
-    if (!authLoading && settingsLoaded && statsLoaded) {
+    if (!authLoading) {
       setIsInitialLoading(false);
     }
   }, [authLoading, settingsLoaded, statsLoaded]);
@@ -1166,7 +1171,7 @@ export default function App() {
     await handleEmailSignInSubmit(undefined, email, expectedPass);
   };
 
-  const isSuperUser = effectiveRole === 'superuser';
+  const isSuperUser = currentUser !== null && effectiveRole === 'superuser';
 
   useEffect(() => {
     if (authLoading || isInitialLoading) return;
@@ -1364,18 +1369,40 @@ export default function App() {
     }
   }, [activeTab, settings.searchMenuLabel, settings.noticesMenuLabel, effectiveRole]);
 
+  // 1. Unauthenticated staff navigating to /plsms MUST see the login panel IMMEDIATELY with zero blocking gates
+  if (isPlsmsPath && !isStaff) {
+    if (authLoading) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 font-sans text-center">
+          <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4 mx-auto" />
+          <h3 className="text-slate-200 font-extrabold text-sm tracking-wide">प्रमाणीकरण जाँच हुँदैछ (Verifying Security Credentials...)</h3>
+          <p className="text-slate-400 text-xs mt-1">Please wait while verifying administrator access rights...</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen flex items-center justify-center p-3 sm:p-4 font-sans bg-[#f1f5f9] text-slate-900 antialiased">
+        {renderLoginCard()}
+      </div>
+    );
+  }
+
+  // 2. Fallback system loading for initial state resolution
   if (isInitialLoading) {
     return (
       <div className={`min-h-screen flex flex-col items-center justify-center font-sans antialiased transition-colors duration-200 ${
         theme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-50 text-slate-900'
       }`}>
         <div className="flex flex-col items-center gap-5">
-          {/* Permanent Nepal Emblem Logo during loading/refreshing */}
+          {/* Permanent Nepal Emblem Logo during loading with reliable fallback */}
           <img 
-            src="https://upload.wikimedia.org/wikipedia/commons/a/bc/Emblem_of_Nepal.svg" 
-            alt="Logo" 
+            src="/nepal-emblem.svg" 
+            alt="Government of Nepal Emblem" 
             className="w-20 h-20 sm:w-24 sm:h-24 object-contain rounded-xl shrink-0 drop-shadow-md" 
-            referrerPolicy="no-referrer" 
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="%231e3a8a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
+            }}
           />
           <div className="relative mt-2">
             {/* Elegant high-performance loader */}
@@ -1383,22 +1410,14 @@ export default function App() {
             <div className="absolute inset-0 w-10 h-10 rounded-full border-4 border-transparent border-b-cyan-400 animate-spin opacity-50" style={{ animationDirection: 'reverse', animationDuration: '0.6s' }} />
           </div>
           <div className="flex flex-col items-center gap-1 text-center px-4">
-            <span className="font-sans font-black text-xs uppercase tracking-widest text-cyan-505 text-cyan-500 animate-pulse">
+            <span className="font-sans font-black text-xs uppercase tracking-widest text-cyan-500 animate-pulse">
               System Loading...
             </span>
             <span className="font-mono text-[9px] text-slate-500 uppercase tracking-widest leading-relaxed">
-              Synchronizing Ledger Registry Data
+              Initializing Secure Environment
             </span>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  if (isPlsmsPath && !isStaff) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-3 sm:p-4 font-sans bg-[#f1f5f9] text-slate-900 antialiased">
-        {renderLoginCard()}
       </div>
     );
   }

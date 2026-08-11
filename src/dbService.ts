@@ -112,7 +112,7 @@ export function checkAndTriggerQuotaError(err: unknown): void {
 const initialMockSettings: OfficeSettings = {
   officeName: "Transport Management Office, Driving License",
   officeAddress: "Itahari, Sunsari, Nepal",
-  officeLogo: "https://upload.wikimedia.org/wikipedia/commons/a/bc/Emblem_of_Nepal.svg",
+  officeLogo: "/nepal-emblem.svg",
   contactNumber: "+977-25-5000000",
   emailAddress: "tmoitahari@gmail.com",
   websiteFooter: "© 2026 Transport Management Office, Driving License, Itahari, Sunsari. Authorized Use Only. All operations are logged and monitored for security compliance.",
@@ -225,7 +225,7 @@ export function sanitizeOfficeSettings(settings: OfficeSettings): OfficeSettings
     logo.trim() === "" ||
     logo.includes("placeholder")
   ) {
-    updatedSettings.officeLogo = "https://upload.wikimedia.org/wikipedia/commons/a/bc/Emblem_of_Nepal.svg";
+    updatedSettings.officeLogo = "/nepal-emblem.svg";
   }
   
   // Enforce other essential fields if they are missing or blank
@@ -723,26 +723,47 @@ export async function getAllLicenses(): Promise<License[]> {
     return getBestAvailableLicenses();
   }
   try {
-    // Budget protection: fetch bounded sample set up to 2000 records to prevent memory overflow
-    const snap = await withFirestoreRetry(() => getDocs(query(collection(db, 'licenses'), limit(2000))));
-    clearQuotaExceededFlag();
-    const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
+    const colRef = collection(db, 'licenses');
+    let lastSnap: QueryDocumentSnapshot | null = null;
+    let hasMore = true;
+    const list: License[] = [];
+
+    while (hasMore) {
+      const q = lastSnap
+        ? query(colRef, limit(1000), startAfter(lastSnap))
+        : query(colRef, limit(1000));
+
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        hasMore = false;
+        break;
+      }
+
+      const docs = snap.docs;
+      for (let i = 0; i < docs.length; i++) {
+        list.push({ id: docs[i].id, ...docs[i].data() } as License);
+      }
+
+      lastSnap = docs[docs.length - 1];
+      if (docs.length < 1000) {
+        hasMore = false;
+      }
+    }
 
     if (list.length > 0) {
       const cappedList = list.length > 2000 ? list.slice(0, 2000) : list;
       writeStorageItem('plsms_live_licenses_backup', cappedList);
-      registryDataStore.setRecords(cappedList, 'Firestore Primary Collection', false);
+      registryDataStore.setRecords(cappedList, 'Firestore Primary Collection', true);
+    } else {
+      writeStorageItem('plsms_live_licenses_backup', []);
+      registryDataStore.clearRegistry();
     }
 
     return list;
   } catch (err) {
-    console.warn("Firestore licenses fetch failed, falling back to persistent local backup:", err);
+    console.warn("Firestore licenses fetch failed:", err);
     checkAndTriggerQuotaError(err);
-    const backup = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
-    if (backup.length > 0) {
-      return backup;
-    }
-    return getBestAvailableLicenses();
+    throw new Error("Unable to retrieve current database data. Please try again.");
   }
 }
 
@@ -2696,7 +2717,9 @@ export async function purgeAllDatabaseRecordsAndLedgers(
     return { totalDeleted: total, verified: true };
   }
 
-  // Clear local storage caches in all modes
+  // Clear local storage caches and in-memory stores in all modes
+  inMemoryStorageMap.clear();
+  registryDataStore.clearRegistry();
   writeStorageItem('plsms_mock_licenses', []);
   writeStorageItem('plsms_mock_ledgers', []);
   writeStorageItem('plsms_mock_requests', []);
@@ -3451,26 +3474,11 @@ export async function fetchIntegratedReportData(params: {
           }
         }
       } catch (err) {
-        console.warn("Firestore paginated read failed, falling back to local store:", err);
+        console.warn("Firestore paginated read failed for integrated report:", err);
+        throw new Error("Unable to retrieve current database data. Please try again.");
       }
-    }
-
-    // Merge with best available licenses (registryDataStore / localStorage) to guarantee complete data
-    const bestLicenses = await getBestAvailableLicenses();
-    if (allLicenses.length === 0) {
-      allLicenses = bestLicenses;
-    } else if (bestLicenses.length > 0) {
-      const licenseMap = new Map<string, License>();
-      allLicenses.forEach(l => licenseMap.set(l.id, l));
-      bestLicenses.forEach(l => {
-        const existing = licenseMap.get(l.id);
-        if (existing) {
-          licenseMap.set(l.id, { ...existing, ...l });
-        } else {
-          licenseMap.set(l.id, l);
-        }
-      });
-      allLicenses = Array.from(licenseMap.values());
+    } else {
+      allLicenses = await getBestAvailableLicenses();
     }
 
     for (const l of allLicenses) {
