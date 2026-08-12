@@ -405,184 +405,100 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
 
       const totalClean = cleanRows.length;
 
-      // High-Speed Direct Batch Import for ALL file sizes (0ms in-memory duplicate checks & concurrency 16)
-      const chunkSize = 500;
-      const chunks: any[][] = [];
-      for (let i = 0; i < cleanRows.length; i += chunkSize) {
-        chunks.push(cleanRows.slice(i, i + chunkSize));
-      }
+      // Prepare all records in memory with in-file duplicate detection
+      const currentTime = new Date().toISOString();
+      const cleanLicenses: License[] = [];
+      const seenMap = new Set<string>();
 
-      const totalChunks = chunks.length;
-      let completedChunks = 0;
+      for (let i = 0; i < cleanRows.length; i++) {
+        const item = cleanRows[i];
+        const row = item.row;
+        const rowIdx = item.originalIndex;
 
-      // In-memory record index for 0ms duplicate checking
-      const inMemoryRecords = registryDataStore.getRecords();
-      const inMemoryMap = new Map<string, License>();
-      inMemoryRecords.forEach(r => {
-        if (r && r.id) inMemoryMap.set(r.id.toUpperCase(), r);
-      });
+        const rawAppId = String(row[columnMapping['applicantId']] || '').trim();
+        const rawName = String(row[columnMapping['fullName']] || '').trim();
+        const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
+        const category = String(row[columnMapping['category']] || 'LTV').trim();
+        const visitDay = String(row[columnMapping['contactDepartment']] || row[columnMapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
+        const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
+        const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
+        const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (rowIdx + 1);
+        const receivedBy = columnMapping['receivedBy'] ? String(row[columnMapping['receivedBy']] || '').trim() : '';
+        const distributedDate = columnMapping['distributedDate'] ? String(row[columnMapping['distributedDate']] || '').trim() : '';
+        const distributedBy = columnMapping['distributedBy'] ? String(row[columnMapping['distributedBy']] || '').trim() : '';
+        const statusVal = columnMapping['status'] ? String(row[columnMapping['status']] || '').trim().toLowerCase() : '';
 
-      // Worker pool with high concurrency of 16
-      const concurrency = 16;
-      let nextChunkIndex = 0;
+        const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+        if (!sanitizedId) {
+          skipped++;
+          continue;
+        }
 
-      const processNextChunk = async (): Promise<void> => {
-        while (nextChunkIndex < totalChunks) {
-          const currentChunkIdx = nextChunkIndex++;
-          const chunk = chunks[currentChunkIdx];
-          
-          const currentTime = new Date().toISOString();
-          const chunkLicenses: License[] = [];
-
-          for (const item of chunk) {
-            const row = item.row;
-            const i = item.originalIndex;
-
-            const rawAppId = String(row[columnMapping['applicantId']] || '').trim();
-            const rawName = String(row[columnMapping['fullName']] || '').trim();
-            const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
-            const category = String(row[columnMapping['category']] || 'LTV').trim();
-            const visitDay = String(row[columnMapping['contactDepartment']] || row[columnMapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
-            const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
-            const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
-            const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (i + 1);
-            const receivedBy = columnMapping['receivedBy'] ? String(row[columnMapping['receivedBy']] || '').trim() : '';
-            const distributedDate = columnMapping['distributedDate'] ? String(row[columnMapping['distributedDate']] || '').trim() : '';
-            const distributedBy = columnMapping['distributedBy'] ? String(row[columnMapping['distributedBy']] || '').trim() : '';
-            const statusVal = columnMapping['status'] ? String(row[columnMapping['status']] || '').trim().toLowerCase() : '';
-
-            const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
-            if (!sanitizedId) {
-              skipped++;
-              continue;
-            }
-
-            const existingRecord = inMemoryMap.get(sanitizedId);
-            if (existingRecord) {
-              if (duplicateStrategy === 'skip') {
-                skipped++;
-                continue;
-              } else if (duplicateStrategy === 'update') {
-                updated++;
-              }
-            }
-
-            const logItem = {
-              timestamp: currentTime,
-              action: existingRecord ? `BULK_UPDATE_${duplicateStrategy.toUpperCase()}` : 'BULK_IMPORT_FAST',
-              user: staffEmail,
-              details: `Imported via file (High-Speed Batch): ${file?.name}`
-            };
-
-            let finalStatus: LicenseStatus = (receivedBy || distributedBy || distributedDate) ? 'distributed' : 'available';
-            if (statusVal === 'distributed' || statusVal === 'available' || statusVal === 'missing' || statusVal === 'found') {
-              finalStatus = statusVal as LicenseStatus;
-            }
-
-            const licenseRecord: License = {
-              id: sanitizedId,
-              applicantId: rawAppId || existingRecord?.applicantId || '',
-              fullName: rawName || existingRecord?.fullName || '',
-              licenseNumber: rawLicenseNo || existingRecord?.licenseNumber || '',
-              category: category || existingRecord?.category || 'LTV',
-              contactDepartment: visitDay || existingRecord?.contactDepartment || 'Monday - Friday (9 AM - 4 PM)',
-              officeVisitDay: visitDay || existingRecord?.officeVisitDay || 'Monday - Friday (9 AM - 4 PM)',
-              oldCode: oldCode || existingRecord?.oldCode || '',
-              newCode: newCode || existingRecord?.newCode || '',
-              sn: sn,
-              receivedBy: receivedBy || existingRecord?.receivedBy || '',
-              distributedDate: distributedDate || existingRecord?.distributedDate || undefined,
-              distributedByStaffName: distributedBy || existingRecord?.distributedByStaffName || undefined,
-              status: finalStatus,
-              createdAt: existingRecord?.createdAt || currentTime,
-              updatedAt: currentTime,
-              updatedBy: staffEmail,
-              logs: existingRecord?.logs ? [...existingRecord.logs, logItem] : [logItem]
-            };
-
-            chunkLicenses.push(licenseRecord);
-            inMemoryMap.set(sanitizedId, licenseRecord);
-          }
-
-          if (chunkLicenses.length > 0) {
-            try {
-              const res = await batchWriteLicenses(chunkLicenses);
-              allBatchResults.push(res);
-              if (res.verificationStatus === 'VERIFIED') {
-                imported += chunkLicenses.length;
-              } else if (res.verificationStatus === 'PARTIAL SUCCESS') {
-                imported += (res.successfulBatchCount * 450);
-              } else {
-                imported += chunkLicenses.length;
-              }
-            } catch (batchErr: any) {
-              console.error(`Error in fast-write batch ${currentChunkIdx}:`, batchErr);
-              errorsList.push(`Batch ${currentChunkIdx + 1} failed: ${batchErr.message || batchErr}`);
-              imported += chunkLicenses.length;
-            }
-          }
-
-          completedChunks++;
-          setProgress(Math.round((completedChunks / totalChunks) * 100));
-
-          // Save persistent checkpoint state for upload recovery
-          try {
-            const checkpointKey = 'plsms_active_upload_checkpoint';
-            localStorage.setItem(checkpointKey, JSON.stringify({
-              fileName: file?.name || 'excel_upload.xlsx',
-              totalClean,
-              completedChunks,
-              totalChunks,
-              imported,
-              lastUpdated: new Date().toISOString()
-            }));
-          } catch (e) {
-            console.warn("Could not write upload checkpoint:", e);
+        if (seenMap.has(sanitizedId)) {
+          if (duplicateStrategy === 'skip') {
+            skipped++;
+            continue;
+          } else {
+            updated++;
           }
         }
-      };
+        seenMap.add(sanitizedId);
 
-      const workers: Promise<void>[] = [];
-      for (let w = 0; w < Math.min(concurrency, totalChunks); w++) {
-        workers.push(processNextChunk());
+        const logItem = {
+          timestamp: currentTime,
+          action: 'BULK_IMPORT_FAST',
+          user: staffEmail,
+          details: `Imported via file: ${file?.name}`
+        };
+
+        let finalStatus: LicenseStatus = (receivedBy || distributedBy || distributedDate) ? 'distributed' : 'available';
+        if (statusVal === 'distributed' || statusVal === 'available' || statusVal === 'missing' || statusVal === 'found') {
+          finalStatus = statusVal as LicenseStatus;
+        }
+
+        const licenseRecord: License = {
+          id: sanitizedId,
+          applicantId: rawAppId,
+          fullName: rawName,
+          licenseNumber: rawLicenseNo,
+          category: category || 'LTV',
+          contactDepartment: visitDay,
+          officeVisitDay: visitDay,
+          oldCode,
+          newCode,
+          sn,
+          receivedBy,
+          distributedDate: distributedDate || undefined,
+          distributedByStaffName: distributedBy || undefined,
+          status: finalStatus,
+          createdAt: currentTime,
+          updatedAt: currentTime,
+          updatedBy: staffEmail,
+          logs: [logItem]
+        };
+
+        cleanLicenses.push(licenseRecord);
       }
 
-      await Promise.all(workers);
+      // Execute high-speed direct batch write with bounded concurrency (4) & max batch limit (450)
+      const res = await batchWriteLicenses(cleanLicenses, (completedBatches, totalBatches) => {
+        setProgress(Math.round((completedBatches / totalBatches) * 100));
+      });
+
+      allBatchResults.push(res);
+      imported = res.successfulBatchCount * 450;
+      if (imported > cleanLicenses.length) imported = cleanLicenses.length;
 
       // Create Government Standard Upload History & Version Ledger
       const now = new Date();
       const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
-      let successfulBatchCount = 0;
-      let failedBatchCount = 0;
-      let totalDurationMs = 0;
-      const aggregatedBatchDetails: BatchCommitDetail[] = [];
-      const aggregatedFailedDetails: BatchCommitDetail[] = [];
-
-      if (allBatchResults.length > 0) {
-        allBatchResults.forEach(r => {
-          successfulBatchCount += r.successfulBatchCount;
-          failedBatchCount += r.failedBatchCount;
-          totalDurationMs += r.verificationDurationMs;
-          if (r.batchDetails) aggregatedBatchDetails.push(...r.batchDetails);
-          if (r.failedBatchDetails) aggregatedFailedDetails.push(...r.failedBatchDetails);
-        });
-      } else {
-        // Safe Mode or Single Batch Fallback
-        successfulBatchCount = (imported + updated) > 0 ? 1 : 0;
-        failedBatchCount = (imported + updated) === 0 ? 1 : 0;
-        const singleDetail: BatchCommitDetail = {
-          batchNumber: 1,
-          recordsCount: imported + updated,
-          startTime: now.toISOString(),
-          finishTime: now.toISOString(),
-          status: (imported + updated) > 0 ? 'SUCCESS' : 'FAILED',
-          retries: 0
-        };
-        aggregatedBatchDetails.push(singleDetail);
-        if (failedBatchCount > 0) aggregatedFailedDetails.push(singleDetail);
-      }
+      let successfulBatchCount = res.successfulBatchCount;
+      let failedBatchCount = res.failedBatchCount;
+      let totalDurationMs = res.verificationDurationMs;
+      const aggregatedBatchDetails: BatchCommitDetail[] = res.batchDetails || [];
+      const aggregatedFailedDetails: BatchCommitDetail[] = res.failedBatchDetails || [];
 
       let verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' = 'VERIFIED';
       if (failedBatchCount > 0 && successfulBatchCount > 0) {

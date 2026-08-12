@@ -1282,7 +1282,10 @@ export async function deleteLicense(id: string): Promise<void> {
   }
 }
 
-export async function batchWriteLicenses(licenses: License[]): Promise<BatchWriteResult> {
+export async function batchWriteLicenses(
+  licenses: License[],
+  onProgress?: (completedBatches: number, totalBatches: number, writtenCount: number) => void
+): Promise<BatchWriteResult> {
   const startTimeOverall = Date.now();
   const batchDetails: BatchCommitDetail[] = [];
 
@@ -1309,6 +1312,8 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
       retries: 0
     };
 
+    if (onProgress) onProgress(1, 1, licenses.length);
+
     return {
       totalRecords: licenses.length,
       successfulBatchCount: 1,
@@ -1321,67 +1326,55 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
     };
   }
 
-  // Instantly save all records to memory store and local IndexedDB cache so UI is updated in 0ms
-  registryDataStore.setRecords(licenses, 'Batch Write Direct Ingestion', false);
-  try {
-    const currentBackup = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
-    const backupMap = new Map<string, License>();
-    currentBackup.forEach(b => { if (b && b.id) backupMap.set(b.id.toUpperCase(), b); });
-    licenses.forEach(s => { if (s && s.id) backupMap.set(s.id.toUpperCase(), s); });
-    const updatedBackup = Array.from(backupMap.values());
-    const cappedBackup = updatedBackup.length > 2000 ? updatedBackup.slice(-2000) : updatedBackup;
-    writeStorageItem('plsms_live_licenses_backup', cappedBackup);
-  } catch (storageErr) {
-    console.warn("Local storage backup update notice:", storageErr);
+  // FIRESTORE PRODUCTION HIGH-SPEED BATCH WRITE ENGINE
+  // BATCH_LIMIT = 450 (Max 450 write operations per Firestore writeBatch)
+  const BATCH_LIMIT = 450;
+  const MAX_CONCURRENT_BATCHES = 4; // Bounded concurrency of 4 simultaneous active commits
+  const MAX_BATCH_RETRIES = 3; // Up to 3 retries with exponential backoff
+
+  const chunks: License[][] = [];
+  for (let i = 0; i < licenses.length; i += BATCH_LIMIT) {
+    chunks.push(licenses.slice(i, i + BATCH_LIMIT));
   }
 
-  // Always commit batch to persistent Cloud Firestore in safe slices with auto-retry
-  const BATCH_LIMIT = 450;
-  let batchNumber = 0;
+  const totalBatches = chunks.length;
+  let completedBatches = 0;
+  let nextChunkIdx = 0;
+  let writtenRecords = 0;
 
-  try {
-    const { writeBatch } = await import('firebase/firestore');
+  const { writeBatch } = await import('firebase/firestore');
 
-    for (let i = 0; i < licenses.length; i += BATCH_LIMIT) {
-      batchNumber++;
-      const slice = licenses.slice(i, i + BATCH_LIMIT);
+  const processChunk = async (): Promise<void> => {
+    while (nextChunkIdx < totalBatches) {
+      const chunkIdx = nextChunkIdx++;
+      const slice = chunks[chunkIdx];
+      const batchNumber = chunkIdx + 1;
       const batchStartTime = new Date().toISOString();
       let retries = 0;
       let batchSuccess = false;
       let lastError = '';
 
-      // First attempt
-      let batch = writeBatch(db);
-      slice.forEach((lic) => {
-        batch.set(doc(db, 'licenses', lic.id), lic);
-      });
-
-      try {
-        await batch.commit();
-        batchSuccess = true;
-      } catch (firstErr: any) {
-        console.warn(`[Batch Commit] Batch ${batchNumber} initial commit failed:`, firstErr);
-        lastError = firstErr?.message || String(firstErr);
-        checkAndTriggerQuotaError(firstErr);
-
-        // Fast Automatic Retry up to 2 times for failed batch
-        for (let attempt = 1; attempt <= 2; attempt++) {
+      // First attempt + Retry loop up to MAX_BATCH_RETRIES
+      for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
+        if (attempt > 0) {
           retries = attempt;
-          await new Promise(r => setTimeout(r, 200 * attempt));
+          // Exponential backoff: 300ms, 600ms, 1200ms
+          await new Promise(r => setTimeout(r, 300 * Math.pow(2, attempt - 1)));
+        }
 
-          try {
-            const retryBatch = writeBatch(db);
-            slice.forEach((lic) => {
-              retryBatch.set(doc(db, 'licenses', lic.id), lic);
-            });
-            await retryBatch.commit();
-            batchSuccess = true;
-            break;
-          } catch (retryErr: any) {
-            console.warn(`[Batch Retry] Batch ${batchNumber} retry #${attempt} failed:`, retryErr);
-            lastError = retryErr?.message || String(retryErr);
-            checkAndTriggerQuotaError(retryErr);
-          }
+        try {
+          const batch = writeBatch(db);
+          slice.forEach((lic) => {
+            const targetDocRef = doc(db, 'licenses', lic.id);
+            batch.set(targetDocRef, lic);
+          });
+          await batch.commit();
+          batchSuccess = true;
+          break;
+        } catch (commitErr: any) {
+          console.warn(`[Batch Write] Batch ${batchNumber}/${totalBatches} (attempt ${attempt + 1}) failed:`, commitErr);
+          lastError = commitErr?.message || String(commitErr);
+          checkAndTriggerQuotaError(commitErr);
         }
       }
 
@@ -1396,50 +1389,69 @@ export async function batchWriteLicenses(licenses: License[]): Promise<BatchWrit
         ...(batchSuccess ? {} : { error: lastError })
       };
       batchDetails.push(detail);
+
+      completedBatches++;
+      if (batchSuccess) {
+        writtenRecords += slice.length;
+      }
+
+      // Invoke progress callback
+      if (onProgress) {
+        onProgress(completedBatches, totalBatches, writtenRecords);
+      }
+
+      // Periodic upload checkpoint saved every 5 completed batches
+      if (completedBatches % 5 === 0 || completedBatches === totalBatches) {
+        try {
+          localStorage.setItem('plsms_active_upload_checkpoint', JSON.stringify({
+            completedBatches,
+            totalBatches,
+            writtenRecords,
+            timestamp: new Date().toISOString()
+          }));
+        } catch (chkErr) {
+          console.warn("Checkpoint save notice:", chkErr);
+        }
+      }
     }
+  };
 
-    const successfulBatchCount = batchDetails.filter(b => b.status === 'SUCCESS').length;
-    const failedBatchDetails = batchDetails.filter(b => b.status === 'FAILED');
-    const failedBatchCount = failedBatchDetails.length;
-
-    let verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' = 'VERIFIED';
-    if (failedBatchCount > 0 && successfulBatchCount > 0) {
-      verificationStatus = 'PARTIAL SUCCESS';
-    } else if (failedBatchCount > 0 && successfulBatchCount === 0) {
-      verificationStatus = 'FAILED';
-    }
-
-    const endTimeOverall = Date.now();
-    const verificationTime = new Date().toISOString();
-
-    console.log(`[Enterprise Batch Verification] Processed ${licenses.length} records across ${batchNumber} batches (${successfulBatchCount} VERIFIED, ${failedBatchCount} FAILED). Status: ${verificationStatus}`);
-
-    return {
-      totalRecords: licenses.length,
-      successfulBatchCount,
-      failedBatchCount,
-      verificationStatus,
-      verificationTime,
-      verificationDurationMs: endTimeOverall - startTimeOverall,
-      batchDetails,
-      failedBatchDetails
-    };
-  } catch (error: any) {
-    console.warn("Failed committing batch licenses to Cloud Firestore: ", error);
-    checkAndTriggerQuotaError(error);
-    const endTimeOverall = Date.now();
-    const failedBatchDetails = batchDetails.filter(b => b.status === 'FAILED');
-    return {
-      totalRecords: licenses.length,
-      successfulBatchCount: batchDetails.filter(b => b.status === 'SUCCESS').length,
-      failedBatchCount: Math.max(1, batchNumber - batchDetails.filter(b => b.status === 'SUCCESS').length),
-      verificationStatus: 'FAILED',
-      verificationTime: new Date().toISOString(),
-      verificationDurationMs: endTimeOverall - startTimeOverall,
-      batchDetails,
-      failedBatchDetails
-    };
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < Math.min(MAX_CONCURRENT_BATCHES, totalBatches); w++) {
+    workers.push(processChunk());
   }
+
+  await Promise.all(workers);
+
+  const endTimeOverall = Date.now();
+  const verificationTime = new Date().toISOString();
+
+  // Sort batch details chronologically by batchNumber
+  batchDetails.sort((a, b) => a.batchNumber - b.batchNumber);
+
+  const successfulBatchCount = batchDetails.filter(b => b.status === 'SUCCESS').length;
+  const failedBatchDetails = batchDetails.filter(b => b.status === 'FAILED');
+  const failedBatchCount = failedBatchDetails.length;
+
+  let verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' = 'VERIFIED';
+  if (failedBatchCount > 0 && successfulBatchCount > 0) {
+    verificationStatus = 'PARTIAL SUCCESS';
+  } else if (failedBatchCount > 0 && successfulBatchCount === 0) {
+    verificationStatus = 'FAILED';
+  }
+
+  console.log(`[Batch Verification] Processed ${licenses.length} records across ${totalBatches} batches (${successfulBatchCount} VERIFIED, ${failedBatchCount} FAILED). Status: ${verificationStatus}`);
+
+  return {
+    totalRecords: licenses.length,
+    successfulBatchCount,
+    failedBatchCount,
+    verificationStatus,
+    verificationTime,
+    verificationDurationMs: endTimeOverall - startTimeOverall,
+    batchDetails,
+    failedBatchDetails
+  };
 }
 
 // ==================== COLLECTION REQUESTS SERVICES ====================

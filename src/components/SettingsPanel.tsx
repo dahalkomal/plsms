@@ -11,6 +11,7 @@ import {
   saveUserRole, 
   deleteUserRole,
   getAllLicenses,
+  batchWriteLicenses,
   getDashboardKpiCounts,
   DashboardKpiCounts,
   getAllCollectionRequests,
@@ -1173,37 +1174,23 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           }
           setUploadProgress(100);
         } else {
-          // High-Speed Concurrent Batch Ingestion (Handles up to 200,000+ records in seconds)
+          // High-Speed Concurrent Batch Ingestion (Handles up to 200,000+ records)
           const fileSeenLicenseNos = new Set<string>();
-
-          // Pre-seed duplicate check set from in-memory registryDataStore for 0ms network latency
-          const existingInDbSet = new Set<string>();
-          if (mode !== 'overwrite') {
-            try {
-              const currentStoreRecords = registryDataStore.getRecords();
-              currentStoreRecords.forEach(r => {
-                if (r && r.id) existingInDbSet.add(r.id.toUpperCase());
-                if (r && r.licenseNumber) existingInDbSet.add(r.licenseNumber.toUpperCase());
-              });
-            } catch (e) {
-              console.warn("Notice checking in-memory records:", e);
-            }
-          }
-
           const currentTime = new Date().toISOString();
           const allPreparedLicenses: License[] = [];
 
-          setUploadProgress(25);
+          setUploadProgress(20);
           setUploadStatusMsg('Preparing records and detecting duplicates in memory...');
 
-          // 1. Prepare all record objects in memory
+          // 1. Prepare all record objects in memory & check in-file duplicates
           for (const item of validRows) {
             const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, visitDay, receivedBy, sn } = item;
             const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
             const upperNo = rawLicenseNo.toUpperCase();
 
-            const isDuplicate = fileSeenLicenseNos.has(upperNo) || existingInDbSet.has(sanitizedId);
+            const isDuplicate = fileSeenLicenseNos.has(upperNo) || fileSeenLicenseNos.has(sanitizedId);
             fileSeenLicenseNos.add(upperNo);
+            if (sanitizedId) fileSeenLicenseNos.add(sanitizedId);
 
             if (isDuplicate) {
               duplicateCount++;
@@ -1242,97 +1229,59 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             allPreparedLicenses.push(licenseRecord);
           }
 
-          // Instantly sync memory store and local IndexedDB cache once in 0ms
-          try {
-            registryDataStore.setRecords(allPreparedLicenses, 'Lot File Ingestion', false);
-            const currentBackup = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
-            const backupMap = new Map<string, License>();
-            currentBackup.forEach(b => { if (b && b.id) backupMap.set(b.id.toUpperCase(), b); });
-            allPreparedLicenses.forEach(s => { if (s && s.id) backupMap.set(s.id.toUpperCase(), s); });
-            const updatedBackup = Array.from(backupMap.values());
-            const cappedBackup = updatedBackup.length > 2000 ? updatedBackup.slice(-2000) : updatedBackup;
-            writeStorageItem('plsms_live_licenses_backup', cappedBackup);
-          } catch (memErr) {
-            console.warn("Local memory store update notice:", memErr);
-          }
+          setUploadProgress(25);
+          setUploadStatusMsg(`Writing records to Firestore in 450-item batches...`);
 
-          setUploadProgress(30);
-
-          // 2. High-Speed Direct Batch Ingestion into Firestore using prepared License objects directly in O(1)
-          const chunkSize = 450;
-          const writeChunks: License[][] = [];
-          for (let i = 0; i < allPreparedLicenses.length; i += chunkSize) {
-            writeChunks.push(allPreparedLicenses.slice(i, i + chunkSize));
-          }
-
-          const totalWriteChunks = writeChunks.length;
-          let writeChunksCompleted = 0;
-
-          // Parallel worker pool with concurrency of 8 for optimal Firestore throughput
-          const concurrency = 8;
-          let nextChunkIdx = 0;
-
-          const processNextWriteChunk = async (): Promise<void> => {
-            while (nextChunkIdx < totalWriteChunks) {
-              const currentCIdx = nextChunkIdx++;
-              const chunk = writeChunks[currentCIdx];
-              const batch = writeBatch(db);
-
-              for (const rec of chunk) {
-                const targetDocRef = doc(db, 'licenses', rec.id);
-                batch.set(targetDocRef, rec);
-              }
-
-              try {
-                await batch.commit();
-              } catch (commitErr: any) {
-                console.warn(`[Fast Batch Commit] Chunk ${currentCIdx + 1}/${totalWriteChunks} notice:`, commitErr);
-                checkAndTriggerQuotaError(commitErr);
-              }
-
-              writeChunksCompleted++;
-              const progressPct = 30 + Math.round((writeChunksCompleted / totalWriteChunks) * 65);
-              const processedCount = Math.min(writeChunksCompleted * chunkSize, allPreparedLicenses.length);
+          // 2. High-Speed Direct Batch Ingestion into Firestore with bounded concurrency and auto-retry
+          const batchResult = await batchWriteLicenses(
+            allPreparedLicenses,
+            (completedBatches, totalBatches, writtenCount) => {
+              const progressPct = 25 + Math.round((completedBatches / totalBatches) * 70);
               setUploadProgress(Math.min(95, progressPct));
-              setUploadStatusMsg(`Writing batch ${writeChunksCompleted} of ${totalWriteChunks} (${processedCount} / ${allPreparedLicenses.length} records)...`);
+              setUploadStatusMsg(`Writing batch ${completedBatches} of ${totalBatches} (${writtenCount} / ${allPreparedLicenses.length} records written)...`);
             }
+          );
+
+          setUploadProgress(98);
+          setUploadStatusMsg('Finalizing upload ledger and status...');
+
+          // Create the ledger entry based on actual Firestore batch results
+          const actualWritten = batchResult.successfulBatchCount * 450;
+          const ledgerStatus = batchResult.failedBatchCount === 0 ? 'Completed' : (batchResult.successfulBatchCount > 0 ? 'Partial' : 'Failed');
+
+          const ledgerEntry = {
+            id: ledgerId,
+            timestamp: timestamp,
+            fileName: selectedFile.name,
+            size: fileSizeStr,
+            actionType: mode === 'overwrite' ? 'Fresh Reload (Overwrote DB)' : (mode === 'append' ? 'Sequential Lot Append' : 'Append Records'),
+            noOfLoadedRecords: loadedCount,
+            importedRecords: Math.min(importedCount, actualWritten),
+            duplicateRecords: duplicateCount,
+            uploader: uploaderEmail,
+            status: ledgerStatus as any
           };
 
-          const workers: Promise<void>[] = [];
-          for (let w = 0; w < Math.min(concurrency, totalWriteChunks); w++) {
-            workers.push(processNextWriteChunk());
+          await createUploadLedger(ledgerEntry);
+
+          // Remove active upload checkpoint after successful completion
+          try {
+            localStorage.removeItem('plsms_active_upload_checkpoint');
+          } catch (e) {
+            console.warn("Checkpoint cleanup notice:", e);
           }
 
-          await Promise.all(workers);
-          setUploadProgress(98);
-          setUploadStatusMsg('Finalizing upload ledger & updating live database registry...');
+          setUploadProgress(100);
+
+          setConsoleMsg({
+            type: batchResult.failedBatchCount === 0 ? 'success' : 'err',
+            text: `Processed "${selectedFile.name}" in ${mode.toUpperCase()} mode. Total rows: ${loadedCount}, Imported: ${importedCount}, Duplicates: ${duplicateCount}. Batches committed: ${batchResult.successfulBatchCount}/${batchResult.batchDetails.length}.`
+          });
+
+          // Refresh upload history and server KPI counts without full collection download
+          await fetchUploadLedgers();
+          await getDashboardKpiCounts(true);
         }
-
-        // Create the ledger entry
-        const ledgerEntry = {
-          id: ledgerId,
-          timestamp: timestamp,
-          fileName: selectedFile.name,
-          size: fileSizeStr,
-          actionType: mode === 'overwrite' ? 'Fresh Reload (Overwrote DB)' : (mode === 'append' ? 'Sequential Lot Append' : 'Append Records'),
-          noOfLoadedRecords: loadedCount,
-          importedRecords: importedCount,
-          duplicateRecords: duplicateCount,
-          uploader: uploaderEmail,
-          status: 'Completed' as const
-        };
-
-        await createUploadLedger(ledgerEntry);
-
-        setConsoleMsg({
-          type: 'success',
-          text: `Successfully processed "${selectedFile.name}" in ${mode.toUpperCase()} mode. Loaded: ${loadedCount} entries, Imported: ${importedCount} records, Duplicates Detected: ${duplicateCount}. Ledger registered permanently.`
-        });
-
-        // Refresh views
-        await fetchConsoleLicenses();
-        await fetchUploadLedgers();
-        // Registry is updated in memory automatically by fetchConsoleLicenses() via registryDataStore.setRecords()
       } catch (err: any) {
         console.error("Bulk upload processing failed: ", err);
         alert("Failed to parse or save bulk ledger records: " + err.message);
