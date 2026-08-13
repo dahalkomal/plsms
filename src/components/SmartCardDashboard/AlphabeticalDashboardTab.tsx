@@ -29,14 +29,14 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
   const loadSummary = useCallback(async (fDate?: string, tDate?: string) => {
     setLoading(true);
     try {
-      const res = await getAlphabeticalSummary(fDate, tDate);
+      const res = await getAlphabeticalSummary(fDate, tDate, licenses);
       setSummary(res);
     } catch (err) {
       console.error("Failed loading alphabetical summary:", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [licenses]);
 
   useEffect(() => {
     loadSummary(isFiltered ? fromDate : undefined, isFiltered ? toDate : undefined);
@@ -69,7 +69,8 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
       const recs = await getLicensesByAlphabet(
         alpha,
         isFiltered ? fromDate : undefined,
-        isFiltered ? toDate : undefined
+        isFiltered ? toDate : undefined,
+        licenses
       );
       setSelectedRecords(recs);
     } catch (err) {

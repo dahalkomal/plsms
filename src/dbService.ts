@@ -1,6 +1,6 @@
 import { db, auth, storage, handleFirestoreError, OperationType, isQuotaOrMemoryError, withFirestoreRetry } from './firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { isLicenseMatch, nepaliToEnglishDigits, cleanAlphanumeric } from './utils/licenseNormalizer';
+import { isLicenseMatch, nepaliToEnglishDigits, cleanAlphanumeric, extractDigits } from './utils/licenseNormalizer';
 import { convertADToBS } from './utils/dateConverter';
 import { registryDataStore } from './registryDataStore';
 import { 
@@ -953,39 +953,176 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
   if (!isDemoModeActive()) {
     try {
       const colRef = collection(db, 'licenses');
-      const qConstraints: QueryConstraint[] = [];
 
-      // Filter by status if requested
-      if (statusFilter === 'distributed') {
-        qConstraints.push(where('status', '==', 'distributed'));
-      } else if (statusFilter === 'missing') {
-        qConstraints.push(where('status', '==', 'missing'));
-      } else if (statusFilter === 'found') {
-        qConstraints.push(where('status', '==', 'found'));
-      } else if (statusFilter === 'not_distributed') {
-        qConstraints.push(where('status', '==', 'available'));
+      // 1. IF NO SEARCH QUERY: USE STANDARD FAST SERVER-SIDE PAGINATION
+      if (!searchQuery || !searchQuery.trim()) {
+        const qConstraints: QueryConstraint[] = [];
+
+        // Filter by status if requested
+        if (statusFilter === 'distributed') {
+          qConstraints.push(where('status', '==', 'distributed'));
+        } else if (statusFilter === 'missing') {
+          qConstraints.push(where('status', '==', 'missing'));
+        } else if (statusFilter === 'found') {
+          qConstraints.push(where('status', '==', 'found'));
+        } else if (statusFilter === 'not_distributed') {
+          qConstraints.push(where('status', '==', 'available'));
+        }
+
+        // Safe ordering using documentId()
+        qConstraints.push(orderBy(documentId()));
+
+        if (lastDocSnap) {
+          qConstraints.push(startAfter(lastDocSnap));
+        }
+
+        if (pageSize > 0) {
+          qConstraints.push(limit(pageSize));
+        }
+
+        const q = query(colRef, ...qConstraints);
+        const snap = await getDocs(q);
+        clearQuotaExceededFlag();
+
+        const rawRecords = snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
+        const newLastDocSnap = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+
+        const records = rawRecords.map(r => {
+          if (isLicenseDistributed(r) && r.status !== 'missing' && r.status !== 'found') {
+            return {
+              ...r,
+              status: 'distributed' as const,
+              distributed: true as any,
+              distributionStatus: 'Distributed' as any
+            };
+          }
+          return r;
+        });
+
+        const filteredRecords = records.filter(l => {
+          if (statusFilter === 'distributed') {
+            return (l.status === 'distributed' || isLicenseDistributed(l)) && l.status !== 'missing' && l.status !== 'found';
+          }
+          if (statusFilter === 'not_distributed') {
+            return !isLicenseDistributed(l) && l.status !== 'missing' && l.status !== 'found';
+          }
+          if (statusFilter === 'missing') {
+            return l.status === 'missing';
+          }
+          if (statusFilter === 'found') {
+            return l.status === 'found';
+          }
+          return true;
+        });
+
+        const countQueryConstraints: QueryConstraint[] = [];
+        if (statusFilter === 'distributed') {
+          countQueryConstraints.push(where('status', '==', 'distributed'));
+        } else if (statusFilter === 'missing') {
+          countQueryConstraints.push(where('status', '==', 'missing'));
+        } else if (statusFilter === 'found') {
+          countQueryConstraints.push(where('status', '==', 'found'));
+        } else if (statusFilter === 'not_distributed') {
+          countQueryConstraints.push(where('status', '==', 'available'));
+        }
+
+        const countSnap = await getCountFromServer(query(colRef, ...countQueryConstraints));
+        const totalCount = countSnap.data().count;
+
+        return {
+          records: filteredRecords,
+          lastDocSnap: newLastDocSnap,
+          totalCount
+        };
       }
 
-      // Safe ordering using documentId() which exists on 100% of documents
-      qConstraints.push(orderBy(documentId()));
+      // 2. WHEN SEARCH QUERY IS PRESENT: DIRECT TARGETED INDEXED FIRESTORE QUERIES
+      const trimmedQuery = searchQuery.trim();
+      const engQuery = nepaliToEnglishDigits(trimmedQuery);
+      const rawUpper = engQuery.toUpperCase();
+      const cleanAlphaNum = cleanAlphanumeric(trimmedQuery);
+      const digits = extractDigits(trimmedQuery);
 
-      if (lastDocSnap) {
-        qConstraints.push(startAfter(lastDocSnap));
+      const candidateStrings: string[] = [];
+      const addCandidate = (c: string) => {
+        if (c && c.trim() && !candidateStrings.includes(c.trim())) {
+          candidateStrings.push(c.trim());
+        }
+      };
+
+      // Formatted license XX-XX-XXXXXXXX
+      if (digits.length >= 4) {
+        addCandidate(`${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`);
+      }
+      addCandidate(rawUpper);
+      addCandidate(cleanAlphaNum);
+      addCandidate(digits);
+      addCandidate(engQuery);
+      addCandidate(trimmedQuery);
+
+      const foundMap = new Map<string, License>();
+
+      // A. Direct document lookups by ID or sanitized candidate string
+      for (const cand of candidateStrings) {
+        try {
+          const docSnap = await getDoc(doc(db, 'licenses', cand));
+          if (docSnap.exists()) {
+            foundMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() } as License);
+          }
+        } catch (_) {}
       }
 
-      if (pageSize > 0) {
-        qConstraints.push(limit(pageSize));
+      // B. Direct field equality queries (licenseNumber, applicantId, id)
+      for (const cand of candidateStrings) {
+        if (foundMap.size >= 10) break;
+        const fieldQueries = [
+          query(colRef, where('licenseNumber', '==', cand), limit(10)),
+          query(colRef, where('applicantId', '==', cand), limit(10)),
+          query(colRef, where('id', '==', cand), limit(10))
+        ];
+        for (const q of fieldQueries) {
+          try {
+            const snap = await getDocs(q);
+            for (const d of snap.docs) {
+              foundMap.set(d.id, { id: d.id, ...d.data() } as License);
+            }
+          } catch (_) {}
+        }
       }
 
-      const q = query(colRef, ...qConstraints);
-      const snap = await getDocs(q);
-      clearQuotaExceededFlag();
+      // C. Prefix/Range queries for licenseNumber if candidate string >= 3 chars
+      if (foundMap.size === 0) {
+        const prefixTerms = [rawUpper, cleanAlphaNum, digits, engQuery].filter(s => s && s.length >= 3);
+        for (const p of prefixTerms) {
+          if (foundMap.size >= 10) break;
+          try {
+            const snap = await getDocs(query(colRef, where('licenseNumber', '>=', p), where('licenseNumber', '<=', p + '\uf8ff'), limit(15)));
+            for (const d of snap.docs) {
+              foundMap.set(d.id, { id: d.id, ...d.data() } as License);
+            }
+          } catch (_) {}
+        }
+      }
 
-      const rawRecords = snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
-      const newLastDocSnap = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+      // D. Name prefix range queries if name search or no direct ID match
+      if (foundMap.size === 0 || rawUpper.length >= 2) {
+        const titleCase = trimmedQuery.charAt(0).toUpperCase() + trimmedQuery.slice(1).toLowerCase();
+        const lowerCase = trimmedQuery.toLowerCase();
+        const nameTerms = Array.from(new Set([rawUpper, titleCase, lowerCase, trimmedQuery])).filter(s => s && s.length >= 2);
 
-      // Filter and normalize status
-      const records = rawRecords.map(r => {
+        for (const nameTerm of nameTerms) {
+          if (foundMap.size >= 25) break;
+          try {
+            const snap = await getDocs(query(colRef, where('fullName', '>=', nameTerm), where('fullName', '<=', nameTerm + '\uf8ff'), limit(15)));
+            for (const d of snap.docs) {
+              foundMap.set(d.id, { id: d.id, ...d.data() } as License);
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Convert found Map to normalized array
+      const rawFoundList = Array.from(foundMap.values()).map(r => {
         if (isLicenseDistributed(r) && r.status !== 'missing' && r.status !== 'found') {
           return {
             ...r,
@@ -997,42 +1134,30 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
         return r;
       });
 
-      const filteredRecords = records.filter(l => {
+      // Filter by statusFilter and match verification
+      const filtered = rawFoundList.filter(l => {
+        // Status filter check
         if (statusFilter === 'distributed') {
-          return (l.status === 'distributed' || isLicenseDistributed(l)) && l.status !== 'missing' && l.status !== 'found';
+          if (!(l.status === 'distributed' || isLicenseDistributed(l)) || l.status === 'missing' || l.status === 'found') return false;
+        } else if (statusFilter === 'not_distributed') {
+          if (isLicenseDistributed(l) || l.status === 'missing' || l.status === 'found') return false;
+        } else if (statusFilter === 'missing') {
+          if (l.status !== 'missing') return false;
+        } else if (statusFilter === 'found') {
+          if (l.status !== 'found') return false;
         }
-        if (statusFilter === 'not_distributed') {
-          return !isLicenseDistributed(l) && l.status !== 'missing' && l.status !== 'found';
-        }
-        if (statusFilter === 'missing') {
-          return l.status === 'missing';
-        }
-        if (statusFilter === 'found') {
-          return l.status === 'found';
-        }
-        return true;
+
+        // Match check using normalizer or name substring
+        return isLicenseMatch(trimmedQuery, l) || (l.fullName || '').toLowerCase().includes(trimmedQuery.toLowerCase());
       });
 
-      // Get count for total count calculation using Aggregate count query
-      const countQueryConstraints: QueryConstraint[] = [];
-      if (statusFilter === 'distributed') {
-        countQueryConstraints.push(where('status', '==', 'distributed'));
-      } else if (statusFilter === 'missing') {
-        countQueryConstraints.push(where('status', '==', 'missing'));
-      } else if (statusFilter === 'found') {
-        countQueryConstraints.push(where('status', '==', 'found'));
-      } else if (statusFilter === 'not_distributed') {
-        countQueryConstraints.push(where('status', '==', 'available'));
-      }
-
-      const countSnap = await getCountFromServer(query(colRef, ...countQueryConstraints));
-      const totalCount = countSnap.data().count;
-
+      clearQuotaExceededFlag();
       return {
-        records: filteredRecords,
-        lastDocSnap: newLastDocSnap,
-        totalCount
+        records: filtered,
+        lastDocSnap: null,
+        totalCount: filtered.length
       };
+
     } catch (err) {
       console.warn("Failed to fetch paginated licenses from Firestore:", err);
       checkAndTriggerQuotaError(err);
@@ -1454,13 +1579,26 @@ export async function batchWriteLicenses(
   };
 }
 
+export function isPlsmsAuthorizedUser(): boolean {
+  if (auth.currentUser) return true;
+  if (typeof window !== 'undefined') {
+    const liveUser = localStorage.getItem('plsms_live_user');
+    const mockUser = localStorage.getItem('plsms_mock_user');
+    const mockRole = localStorage.getItem('plsms_mock_user_role');
+    if (liveUser || mockUser || mockRole) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ==================== COLLECTION REQUESTS SERVICES ====================
 
 export async function getAllCollectionRequests(): Promise<CollectionRequest[]> {
   if (isDemoModeActive()) {
     return fetchStorageItem<CollectionRequest[]>('plsms_mock_requests', initialMockRequests);
   }
-  if (!auth.currentUser) {
+  if (!isPlsmsAuthorizedUser()) {
     return [];
   }
   try {
@@ -2427,7 +2565,7 @@ export async function getAllUploadLedgers(): Promise<UploadLedger[]> {
   if (isDemoModeActive()) {
     return fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
   }
-  if (!auth.currentUser) {
+  if (!isPlsmsAuthorizedUser()) {
     return [];
   }
   try {
@@ -3036,10 +3174,22 @@ export interface AlphabeticalSummaryResult {
   totalRemained: number;
 }
 
-export async function getAlphabeticalSummary(startDateBS?: string, endDateBS?: string): Promise<AlphabeticalSummaryResult> {
-  const storeRecords = registryDataStore.getRecords();
-  const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
-  let list = storeRecords.length >= storageRecords.length ? storeRecords : storageRecords;
+export async function getAlphabeticalSummary(
+  startDateBS?: string, 
+  endDateBS?: string,
+  providedLicenses?: License[]
+): Promise<AlphabeticalSummaryResult> {
+  let list: License[] = [];
+  if (providedLicenses && Array.isArray(providedLicenses) && providedLicenses.length > 0) {
+    list = providedLicenses;
+  } else {
+    const storeRecords = registryDataStore.getRecords();
+    if (storeRecords && storeRecords.length > 0) {
+      list = storeRecords;
+    } else {
+      list = await getAllLicenses();
+    }
+  }
 
   const getLicenseBSDateForSummary = (lic: License): string => {
     if (lic.distributionDate && typeof lic.distributionDate === 'string' && lic.distributionDate.trim()) {
@@ -3071,12 +3221,7 @@ export async function getAlphabeticalSummary(startDateBS?: string, endDateBS?: s
   };
 
   const hasDateFilter = Boolean(startDateBS || endDateBS);
-
   if (hasDateFilter) {
-    const bestList = await getBestAvailableLicenses();
-    if (bestList.length > list.length) {
-      list = bestList;
-    }
     list = list.filter(lic => {
       const bs = getLicenseBSDateForSummary(lic);
       if (startDateBS && bs && bs < startDateBS) return false;
@@ -3085,212 +3230,133 @@ export async function getAlphabeticalSummary(startDateBS?: string, endDateBS?: s
     });
   }
 
-  // Helper to extract first character / alphabet
-  const getFirstAlpha = (name: string): string => {
-    const cleanName = (name || '').trim().toUpperCase();
-    if (!cleanName) return '';
-    const firstChar = cleanName[0];
-    if (firstChar >= 'A' && firstChar <= 'Z') {
-      return firstChar;
+  // Helper to extract first character / alphabet safely
+  const getFirstAlpha = (name?: string): string => {
+    if (!name || typeof name !== 'string') return '';
+    // Strip leading BOM (\uFEFF), zero-width characters, spaces, tabs, newlines
+    const clean = name.replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').trim();
+    if (!clean) return '';
+
+    // Search for the first English letter A-Z or a-z in the string
+    for (let i = 0; i < clean.length; i++) {
+      const char = clean[i].toUpperCase();
+      if (char >= 'A' && char <= 'Z') {
+        return char;
+      }
     }
-    return firstChar;
+    return '';
   };
 
-  if (hasDateFilter || isDemoModeActive()) {
-    const alphabets = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+  const alphabets = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
 
-    const statsMap: Record<string, { count: number; distributed: number }> = {};
-    alphabets.forEach(alpha => {
-      statsMap[alpha] = { count: 0, distributed: 0 };
-    });
+  const statsMap: Record<string, { count: number; distributed: number; missing: number; found: number }> = {};
+  alphabets.forEach(alpha => {
+    statsMap[alpha] = { count: 0, distributed: 0, missing: 0, found: 0 };
+  });
 
-    let otherCount = 0;
-    let otherDistributed = 0;
+  let otherCount = 0;
+  let otherDistributed = 0;
+  let otherMissing = 0;
+  let otherFound = 0;
 
-    let overallTotal = list.length;
-    let overallDistributed = 0;
+  let overallTotal = 0;
+  let overallDistributed = 0;
 
-    list.forEach(lic => {
-      const isDist = lic.status === 'distributed' || lic.status === 'found' || isLicenseDistributed(lic);
-      if (isDist) overallDistributed++;
+  list.forEach(lic => {
+    if (!lic) return;
+    overallTotal++;
 
-      const firstChar = getFirstAlpha(lic.fullName);
-      if (firstChar >= 'A' && firstChar <= 'Z') {
-        statsMap[firstChar].count++;
-        if (isDist) statsMap[firstChar].distributed++;
-      } else if (firstChar) {
-        otherCount++;
-        if (isDist) otherDistributed++;
-      }
-    });
+    const isDist = lic.status === 'distributed' || isLicenseDistributed(lic);
+    const isMiss = lic.status === 'missing';
+    const isFnd = lic.status === 'found';
 
-    const stats: AlphabetStat[] = alphabets.map(alpha => {
-      const item = statsMap[alpha] || { count: 0, distributed: 0 };
-      return {
-        alphabet: alpha,
-        count: item.count,
-        distributed: item.distributed,
-        remained: Math.max(0, item.count - item.distributed)
-      };
-    });
+    if (isDist) overallDistributed++;
 
-    if (otherCount > 0) {
-      stats.push({
-        alphabet: 'OTHERS / अन्य',
-        count: otherCount,
-        distributed: otherDistributed,
-        remained: Math.max(0, otherCount - otherDistributed)
-      });
+    const nameToClassify = lic.fullName || (lic as any).full_name || (lic as any).applicantName || (lic as any).licenseHolderName || '';
+    const firstChar = getFirstAlpha(nameToClassify);
+
+    if (firstChar >= 'A' && firstChar <= 'Z') {
+      statsMap[firstChar].count++;
+      if (isDist) statsMap[firstChar].distributed++;
+      else if (isMiss) statsMap[firstChar].missing++;
+      else if (isFnd) statsMap[firstChar].found++;
+    } else {
+      otherCount++;
+      if (isDist) otherDistributed++;
+      else if (isMiss) otherMissing++;
+      else if (isFnd) otherFound++;
     }
+  });
 
-    const overallRemained = Math.max(0, overallTotal - overallDistributed);
-
+  const stats: AlphabetStat[] = alphabets.map(alpha => {
+    const item = statsMap[alpha];
     return {
-      alphabetStats: stats,
-      totalCount: overallTotal,
-      totalDistributed: overallDistributed,
-      totalRemained: overallRemained
-    };
-  }
-
-  // Live Firestore aggregation using getCountFromServer
-  try {
-    const col = collection(db, 'licenses');
-    const alphabets = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
-
-    // Get exact KPI totals from server
-    const kpi = await getDashboardKpiCounts();
-
-    const promises = alphabets.map(async (alpha) => {
-      const nextChar = alpha === 'Z' ? 'Z\uf8ff' : String.fromCharCode(alpha.charCodeAt(0) + 1);
-      const lowerAlpha = alpha.toLowerCase();
-      const lowerNextChar = lowerAlpha === 'z' ? 'z\uf8ff' : String.fromCharCode(lowerAlpha.charCodeAt(0) + 1);
-
-      let total = 0;
-      let dist = 0;
-
-      try {
-        // Upper-case query
-        const upperTotalSnap = await getCountFromServer(query(
-          col,
-          where('fullName', '>=', alpha),
-          where('fullName', '<', nextChar)
-        ));
-        total += upperTotalSnap.data().count;
-
-        // Lower-case query
-        const lowerTotalSnap = await getCountFromServer(query(
-          col,
-          where('fullName', '>=', lowerAlpha),
-          where('fullName', '<', lowerNextChar)
-        ));
-        total += lowerTotalSnap.data().count;
-
-        // Distributed query
-        try {
-          const upperDistSnap = await getCountFromServer(query(
-            col,
-            where('fullName', '>=', alpha),
-            where('fullName', '<', nextChar),
-            where('status', 'in', ['distributed', 'found'])
-          ));
-          dist += upperDistSnap.data().count;
-
-          const lowerDistSnap = await getCountFromServer(query(
-            col,
-            where('fullName', '>=', lowerAlpha),
-            where('fullName', '<', lowerNextChar),
-            where('status', 'in', ['distributed', 'found'])
-          ));
-          dist += lowerDistSnap.data().count;
-        } catch {
-          // Fallback if status + fullName index is not built
-          const upperDistOnly = await getCountFromServer(query(
-            col,
-            where('fullName', '>=', alpha),
-            where('fullName', '<', nextChar),
-            where('status', '==', 'distributed')
-          ));
-          const upperFoundOnly = await getCountFromServer(query(
-            col,
-            where('fullName', '>=', alpha),
-            where('fullName', '<', nextChar),
-            where('status', '==', 'found')
-          ));
-          dist += upperDistOnly.data().count + upperFoundOnly.data().count;
-
-          const lowerDistOnly = await getCountFromServer(query(
-            col,
-            where('fullName', '>=', lowerAlpha),
-            where('fullName', '<', lowerNextChar),
-            where('status', '==', 'distributed')
-          ));
-          const lowerFoundOnly = await getCountFromServer(query(
-            col,
-            where('fullName', '>=', lowerAlpha),
-            where('fullName', '<', lowerNextChar),
-            where('status', '==', 'found')
-          ));
-          dist += lowerDistOnly.data().count + lowerFoundOnly.data().count;
-        }
-      } catch (qErr) {
-        console.warn(`Query for letter ${alpha} failed:`, qErr);
-      }
-
-      return {
-        alphabet: alpha,
-        count: total,
-        distributed: dist,
-        remained: Math.max(0, total - dist)
-      };
-    });
-
-    const stats = await Promise.all(promises);
-
-    const sumCount = stats.reduce((acc, curr) => acc + curr.count, 0);
-    const sumDist = stats.reduce((acc, curr) => acc + curr.distributed, 0);
-
-    const otherCount = Math.max(0, kpi.totalRecords - sumCount);
-    const otherDist = Math.max(0, kpi.distributedCount - sumDist);
-
-    if (otherCount > 0) {
-      stats.push({
-        alphabet: 'OTHERS / अन्य',
-        count: otherCount,
-        distributed: otherDist,
-        remained: Math.max(0, otherCount - otherDist)
-      });
-    }
-
-    clearQuotaExceededFlag();
-
-    return {
-      alphabetStats: stats,
-      totalCount: kpi.totalRecords,
-      totalDistributed: kpi.distributedCount,
-      totalRemained: kpi.notDistributedCount
-    };
-  } catch (err) {
-    console.warn("Firestore alphabetical aggregation failed:", err);
-    checkAndTriggerQuotaError(err);
-    const kpi = await getDashboardKpiCounts();
-    const alphabets = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
-    const stats: AlphabetStat[] = alphabets.map(alpha => ({
       alphabet: alpha,
-      count: 0,
-      distributed: 0,
-      remained: 0
-    }));
-    return {
-      alphabetStats: stats,
-      totalCount: kpi.totalRecords,
-      totalDistributed: kpi.distributedCount,
-      totalRemained: kpi.notDistributedCount
+      count: item.count,
+      distributed: item.distributed,
+      remained: Math.max(0, item.count - item.distributed - item.missing - item.found)
     };
+  });
+
+  stats.push({
+    alphabet: 'OTHERS / अन्य',
+    count: otherCount,
+    distributed: otherDistributed,
+    remained: Math.max(0, otherCount - otherDistributed - otherMissing - otherFound)
+  });
+
+  const totalCount = stats.reduce((acc, row) => acc + row.count, 0);
+  const totalDistributed = stats.reduce((acc, row) => acc + row.distributed, 0);
+  const totalRemained = stats.reduce((acc, row) => acc + row.remained, 0);
+
+  if (totalCount !== overallTotal || totalDistributed !== overallDistributed) {
+    console.warn(`[ALPHABETICAL SUMMARY RECONCILIATION] Total count sum: ${totalCount} vs actual total: ${overallTotal}; Dist sum: ${totalDistributed} vs actual dist: ${overallDistributed}`);
   }
+
+  return {
+    alphabetStats: stats,
+    totalCount,
+    totalDistributed,
+    totalRemained
+  };
 }
 
-export async function getLicensesByAlphabet(alpha: string, startDateBS?: string, endDateBS?: string): Promise<License[]> {
+export async function getLicensesByAlphabet(
+  alpha: string, 
+  startDateBS?: string, 
+  endDateBS?: string,
+  providedLicenses?: License[]
+): Promise<License[]> {
+  let list: License[] = [];
+  if (providedLicenses && Array.isArray(providedLicenses) && providedLicenses.length > 0) {
+    list = providedLicenses;
+  } else {
+    const storeRecords = registryDataStore.getRecords();
+    if (storeRecords && storeRecords.length > 0) {
+      list = storeRecords;
+    } else {
+      list = await getAllLicenses();
+    }
+  }
+
+  const cleanAlpha = (alpha || '').toUpperCase();
+
+  const getFirstAlpha = (name?: string): string => {
+    if (!name || typeof name !== 'string') return '';
+    // Strip leading BOM (\uFEFF), zero-width characters, spaces, tabs, newlines
+    const clean = name.replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').trim();
+    if (!clean) return '';
+
+    // Search for the first English letter A-Z or a-z in the string
+    for (let i = 0; i < clean.length; i++) {
+      const char = clean[i].toUpperCase();
+      if (char >= 'A' && char <= 'Z') {
+        return char;
+      }
+    }
+    return '';
+  };
+
   const getLicenseBSDate = (lic: License): string => {
     if (lic.distributionDate && typeof lic.distributionDate === 'string' && lic.distributionDate.trim()) {
       const d = lic.distributionDate.trim();
@@ -3320,72 +3386,27 @@ export async function getLicensesByAlphabet(alpha: string, startDateBS?: string,
     return '';
   };
 
-  if (startDateBS || endDateBS || isDemoModeActive()) {
-    const list = await getBestAvailableLicenses();
-    const cleanAlpha = alpha.toUpperCase();
-    return list.filter(l => {
-      const name = (l.fullName || '').trim().toUpperCase();
-      let matchesAlpha = false;
-      if (cleanAlpha.startsWith('OTHERS')) {
-        const first = name[0] || '';
-        matchesAlpha = !(first >= 'A' && first <= 'Z');
-      } else {
-        matchesAlpha = name.startsWith(cleanAlpha);
-      }
-      if (!matchesAlpha) return false;
+  return list.filter(l => {
+    if (!l) return false;
+    const nameToClassify = l.fullName || (l as any).full_name || (l as any).applicantName || (l as any).licenseHolderName || '';
+    const firstChar = getFirstAlpha(nameToClassify);
 
-      if (startDateBS || endDateBS) {
-        const bs = getLicenseBSDate(l);
-        if (startDateBS && bs && bs < startDateBS) return false;
-        if (endDateBS && bs && bs > endDateBS) return false;
-      }
-      return true;
-    });
-  }
+    let matchesAlpha = false;
+    if (cleanAlpha.startsWith('OTHER') || cleanAlpha.startsWith('OTHERS')) {
+      matchesAlpha = (firstChar === '');
+    } else {
+      matchesAlpha = (firstChar === cleanAlpha);
+    }
+    if (!matchesAlpha) return false;
 
-  try {
-    const col = collection(db, 'licenses');
-    const cleanAlpha = alpha.toUpperCase();
-
-    if (cleanAlpha.startsWith('OTHERS')) {
-      const snap = await getDocs(query(col, limit(100)));
-      return snap.docs.map(d => ({ id: d.id, ...d.data() } as License)).filter(l => {
-        const name = (l.fullName || '').trim().toUpperCase();
-        const first = name[0] || '';
-        return !(first >= 'A' && first <= 'Z');
-      });
+    if (startDateBS || endDateBS) {
+      const bs = getLicenseBSDate(l);
+      if (startDateBS && bs && bs < startDateBS) return false;
+      if (endDateBS && bs && bs > endDateBS) return false;
     }
 
-    const nextChar = cleanAlpha === 'Z' ? 'Z\uf8ff' : String.fromCharCode(cleanAlpha.charCodeAt(0) + 1);
-    const lowerAlpha = cleanAlpha.toLowerCase();
-    const lowerNextChar = lowerAlpha === 'z' ? 'z\uf8ff' : String.fromCharCode(lowerAlpha.charCodeAt(0) + 1);
-
-    const [upperSnap, lowerSnap] = await Promise.all([
-      getDocs(query(col, where('fullName', '>=', cleanAlpha), where('fullName', '<', nextChar), limit(100))),
-      getDocs(query(col, where('fullName', '>=', lowerAlpha), where('fullName', '<', lowerNextChar), limit(100)))
-    ]);
-
-    const upperDocs = upperSnap.docs.map(d => ({ id: d.id, ...d.data() } as License));
-    const lowerDocs = lowerSnap.docs.map(d => ({ id: d.id, ...d.data() } as License));
-
-    const combinedMap = new Map<string, License>();
-    [...upperDocs, ...lowerDocs].forEach(d => combinedMap.set(d.id, d));
-    clearQuotaExceededFlag();
-    return Array.from(combinedMap.values());
-  } catch (err) {
-    console.warn(`Failed to fetch licenses for alphabet ${alpha}:`, err);
-    checkAndTriggerQuotaError(err);
-    const list = await getBestAvailableLicenses();
-    const cleanAlpha = alpha.toUpperCase();
-    return list.filter(l => {
-      const name = (l.fullName || '').trim().toUpperCase();
-      if (cleanAlpha.startsWith('OTHERS')) {
-        const first = name[0] || '';
-        return !(first >= 'A' && first <= 'Z');
-      }
-      return name.startsWith(cleanAlpha);
-    });
-  }
+    return true;
+  });
 }
 
 // ==================== INTEGRATED REPORT DATA FETCH ENGINE ====================

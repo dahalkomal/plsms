@@ -11,6 +11,7 @@ import {
   saveUserRole, 
   deleteUserRole,
   getAllLicenses,
+  getPaginatedLicenses,
   batchWriteLicenses,
   getDashboardKpiCounts,
   DashboardKpiCounts,
@@ -202,6 +203,37 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   const [securityUnlocked, setSecurityUnlocked] = useState(false);
   const [securityPin, setSecurityPin] = useState('');
   const [consoleSearchQuery, setConsoleSearchQuery] = useState('');
+  const [consoleSearchResults, setConsoleSearchResults] = useState<any[]>([]);
+  const [consoleSearching, setConsoleSearching] = useState(false);
+
+  useEffect(() => {
+    if (!consoleSearchQuery.trim()) {
+      setConsoleSearchResults([]);
+      setConsoleSearching(false);
+      return;
+    }
+    let active = true;
+    setConsoleSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await getPaginatedLicenses({
+          pageSize: 15,
+          searchQuery: consoleSearchQuery
+        });
+        if (active) {
+          setConsoleSearchResults(res.records);
+        }
+      } catch (e) {
+        console.warn("Console search error:", e);
+      } finally {
+        if (active) setConsoleSearching(false);
+      }
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [consoleSearchQuery]);
   const [uploaderTab, setUploaderTab] = useState<'lot' | 'advanced'>('lot');
   const [ledgerSearchQuery, setLedgerSearchQuery] = useState('');
   const [activeLicenseFilter, setActiveLicenseFilter] = useState<'all' | 'lots' | 'available' | null>('lots');
@@ -4778,11 +4810,21 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                     {consoleSearchQuery.trim().length > 0 && (
                       <div className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
                         {(() => {
+                          if (consoleSearching) {
+                            return (
+                              <p className="text-xs text-cyan-400 py-4 text-center italic animate-pulse">
+                                Searching database records...
+                              </p>
+                            );
+                          }
+
                           const query = consoleSearchQuery.trim().toLowerCase();
-                          const matching = allLicenses.filter(l => 
-                            (l.licenseNumber || '').toLowerCase().includes(query) ||
-                            (l.fullName || '').toLowerCase().includes(query)
-                          ).slice(0, 15);
+                          const matching = consoleSearchResults.length > 0 
+                            ? consoleSearchResults 
+                            : allLicenses.filter(l => 
+                                (l.licenseNumber || '').toLowerCase().includes(query) ||
+                                (l.fullName || '').toLowerCase().includes(query)
+                              ).slice(0, 15);
 
                           if (matching.length === 0) {
                             return (

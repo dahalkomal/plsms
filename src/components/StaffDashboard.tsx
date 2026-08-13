@@ -19,7 +19,7 @@ import {
 } from '../dbService';
 import { registryDataStore } from '../registryDataStore';
 import { License, LicenseStatus, LicenseLog, CollectionRequest, UploadLedger } from '../types';
-import { Search, Plus, Filter, FileText, Check, AlertCircle, Bookmark, Archive, UserCheck, ShieldAlert, History, ArrowDown, Download, Eye, FileDown, Lock, FileSpreadsheet, Trash2 } from 'lucide-react';
+import { Search, Plus, Filter, FileText, Check, AlertCircle, Bookmark, Archive, UserCheck, ShieldAlert, History, ArrowDown, Download, Eye, FileDown, Lock, FileSpreadsheet, Trash2, X, Loader2 } from 'lucide-react';
 import LicenseHistory from './LicenseHistory';
 import NepaliDatePicker from './NepaliDatePicker';
 import { convertADToBS } from '../utils/dateConverter';
@@ -115,6 +115,19 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   const [searchesCount, setSearchesCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Debounce search query input by 300ms
+  useEffect(() => {
+    if (searchQuery.trim() !== debouncedSearchQuery.trim()) {
+      setIsSearching(true);
+    }
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
   const [serverKpiCounts, setServerKpiCounts] = useState<{
     totalRecords: number;
     availableCount: number;
@@ -1037,18 +1050,19 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   useEffect(() => {
     setCurrentPage(1);
     setPageDocSnaps([null]);
-  }, [searchQuery, activeRegister, pageSize]);
+  }, [debouncedSearchQuery, activeRegister, pageSize]);
 
   useEffect(() => {
     let active = true;
     const fetchPage = async () => {
       try {
+        setIsSearching(true);
         const lastDocSnap = pageDocSnaps[currentPage - 1] || null;
         const res = await getPaginatedLicenses({
           pageSize: pageSize === 0 ? 0 : pageSize,
           lastDocSnap,
           statusFilter: activeRegister,
-          searchQuery
+          searchQuery: debouncedSearchQuery
         });
         if (active) {
           setLicenses(res.records);
@@ -1063,11 +1077,15 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         }
       } catch (err) {
         console.warn("Error fetching paginated page:", err);
+      } finally {
+        if (active) {
+          setIsSearching(false);
+        }
       }
     };
     fetchPage();
     return () => { active = false; };
-  }, [currentPage, pageSize, activeRegister, searchQuery]);
+  }, [currentPage, pageSize, activeRegister, debouncedSearchQuery]);
 
   const totalPages = useMemo(() => {
     if (pageSize === 0) return 1;
@@ -1570,29 +1588,69 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
           </div>
 
           {/* Search Box */}
-          <div className="relative">
+          <div className="relative flex items-center">
             <Search className={`absolute left-3.5 top-3 w-4 h-4 ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter current register by name, license number, or applicant code..."
-              className={`w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs focus:outline-hidden transition-all ${
+              placeholder="Search current register by license number, name, or applicant code..."
+              className={`w-full pl-10 pr-24 py-2.5 rounded-xl border text-xs focus:outline-hidden transition-all ${
                 isDark 
                   ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500 focus:border-cyan-500' 
                   : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400 focus:border-cyan-500 focus:bg-white focus:shadow-xs'
               }`}
             />
+            <div className="absolute right-3 flex items-center gap-2">
+              {isSearching && (
+                <span className="flex items-center gap-1 text-[10px] font-bold text-cyan-500 animate-pulse shrink-0">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Searching...
+                </span>
+              )}
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDebouncedSearchQuery('');
+                  }}
+                  className={`p-1 rounded-full hover:bg-slate-800/20 text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                    isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                  title="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Ledger Table */}
           {loading ? (
-            <div className={`text-center py-12 text-xs ${isDark ? 'text-slate-400' : 'text-slate-505 text-slate-500'}`}>Loading ledger lists...</div>
+            <div className={`text-center py-12 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Loading ledger lists...</div>
           ) : filteredLicenses.length === 0 ? (
-            <div className={`text-center py-16 text-xs rounded-2xl border border-dashed ${
-              isDark ? 'bg-slate-950/40 border-slate-800 text-slate-550' : 'bg-slate-50 border-slate-200 text-slate-500 font-medium'
+            <div className={`text-center py-12 px-4 text-xs rounded-2xl border border-dashed space-y-3 ${
+              isDark ? 'bg-slate-950/40 border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600 font-medium'
             }`}>
-              No licensed entries under this register match search parameters.
+              <p>
+                {searchQuery.trim()
+                  ? `No matching license records found for "${searchQuery}" under this register.`
+                  : "No licensed entries under this register match current view constraints."}
+              </p>
+              {searchQuery.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDebouncedSearchQuery('');
+                  }}
+                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold rounded-lg cursor-pointer transition-colors inline-flex items-center gap-1.5"
+                >
+                  <X className="w-3 h-3" />
+                  Clear Search Filter
+                </button>
+              )}
             </div>
           ) : (
             <>
@@ -3457,11 +3515,3 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   );
 }
 
-// Simple absolute close helper
-function X({ className }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className={className}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
