@@ -157,6 +157,7 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
           } else if (norm.includes('newcode') || norm.includes('new') || norm === 'new_code') {
             initialMapping['newCode'] = col;
           } else if (norm.includes('contactdepartment') || norm.includes('contactdeparfment') || norm.includes('contactdept') || norm.includes('department') || norm.includes('dept') || norm.includes('visit') || norm.includes('day') || norm.includes('scheduled') || norm.includes('visitdate') || norm.includes('visit_date') || norm.includes('date')) {
+            initialMapping['department'] = col;
             initialMapping['contactDepartment'] = col;
             initialMapping['officeVisitDay'] = col;
           } else if (norm.includes('received') || norm.includes('receiver') || norm.includes('receivedby') || norm === 'received_by') {
@@ -235,7 +236,7 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
       "CATEGORY",
       "OLD CODE",
       "NEW CODE",
-      "VISITING DATE",
+      "DEPARTMENT",
       "RECEIVED BY",
       "DISTRIBUTED DATE",
       "DISTRIBUTED BY"
@@ -419,7 +420,13 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         const rawName = String(row[columnMapping['fullName']] || '').trim();
         const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
         const category = String(row[columnMapping['category']] || 'LTV').trim();
-        const visitDay = String(row[columnMapping['contactDepartment']] || row[columnMapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
+        const rawDept = String(
+          row[columnMapping['department']] || 
+          row[columnMapping['contactDepartment']] || 
+          row[columnMapping['officeVisitDay']] || 
+          ''
+        ).trim();
+        const visitDay = rawDept || 'Monday - Friday (9 AM - 4 PM)';
         const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
         const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
         const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (rowIdx + 1);
@@ -462,7 +469,8 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
           fullName: rawName,
           licenseNumber: rawLicenseNo,
           category: category || 'LTV',
-          contactDepartment: visitDay,
+          department: rawDept || undefined,
+          contactDepartment: rawDept || visitDay,
           officeVisitDay: visitDay,
           oldCode,
           newCode,

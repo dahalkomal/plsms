@@ -390,7 +390,7 @@ export async function exportReportToExcel(options: ExportReportOptions): Promise
         const category = cleanVal(rec.category || rec.class);
         const oldCode = cleanVal(rec.oldCode || rec.old_code);
         const newCode = cleanVal(rec.newCode || rec.new_code);
-        const visitingDate = cleanVal(rec.contactDepartment || rec.officeVisitDay || rec.visitingDate || rec.visitDay);
+        const visitingDate = cleanVal(rec.department || rec.contactDepartment || rec.officeVisitDay || rec.visitingDate || rec.visitDay);
         const receivedBy = resolveStaffName(rec.receivedBy || rec.receiverName || rec.collectedBy, userRolesList) || cleanVal(rec.receivedBy || rec.receiverName || rec.collectedBy);
         const distributedDate = isDistributed ? cleanVal(rec.distributedDate || formatDateBS(rec.updatedAt || rec.distributionDate)) : '';
         const distributedBy = isDistributed ? resolveStaffName(rec.distributedByStaffName || rec.distributedBy || rec.updatedBy, userRolesList) : '';
@@ -608,7 +608,7 @@ export async function exportReportToCsv(options: ExportReportOptions): Promise<v
         Category: cleanVal(l.category || l.class),
         OldCode: cleanVal(l.oldCode || l.old_code),
         NewCode: cleanVal(l.newCode || l.new_code),
-        VisitingDate: cleanVal(l.contactDepartment || l.officeVisitDay || l.visitingDate || l.visitDay),
+        VisitingDate: cleanVal(l.department || l.contactDepartment || l.officeVisitDay || l.visitingDate || l.visitDay),
         ReceivedBy: resolveStaffName(l.receivedBy || l.receiverName || l.collectedBy, userRolesList) || cleanVal(l.receivedBy || l.receiverName || l.collectedBy),
         DistributedDate: isDist ? cleanVal(l.distributedDate || formatDateBS(l.updatedAt || l.distributionDate)) : '',
         DistributedBy: isDist ? resolveStaffName(l.distributedByStaffName || l.distributedBy || l.updatedBy, userRolesList) : '',
@@ -750,7 +750,7 @@ export async function exportIntegratedReportToExcel(options: IntegratedExportOpt
               cleanVal(rec.category || rec.class),
               cleanVal(rec.oldCode || rec.old_code),
               cleanVal(rec.newCode || rec.new_code),
-              cleanVal(rec.contactDepartment || rec.officeVisitDay || rec.visitingDate || rec.visitDay),
+              cleanVal(rec.department || rec.contactDepartment || rec.officeVisitDay || rec.visitingDate || rec.visitDay),
               resolveStaffName(rec.receivedBy || rec.receiverName || rec.collectedBy, userRolesList) || cleanVal(rec.receivedBy || rec.receiverName || rec.collectedBy),
               isDist ? cleanVal(rec.distributedDate || formatDateBS(rec.updatedAt || rec.distributionDate)) : '',
               isDist ? resolveStaffName(rec.distributedByStaffName || rec.distributedBy || rec.updatedBy, userRolesList) : '',
@@ -1068,7 +1068,7 @@ export async function exportReportToPdf(options: ExportReportOptions): Promise<v
       const category = cleanVal(rec.category || rec.class);
       const oldCode = cleanVal(rec.oldCode || rec.old_code);
       const newCode = cleanVal(rec.newCode || rec.new_code);
-      const visitingDate = cleanVal(rec.contactDepartment || rec.officeVisitDay || rec.visitingDate || rec.visitDay);
+      const visitingDate = cleanVal(rec.department || rec.contactDepartment || rec.officeVisitDay || rec.visitingDate || rec.visitDay);
       const receivedBy = resolveStaffName(rec.receivedBy || rec.receiverName || rec.collectedBy, userRolesList) || cleanVal(rec.receivedBy || rec.receiverName || rec.collectedBy);
       const distributedDate = isDist ? cleanVal(rec.distributedDate || formatDateBS(rec.updatedAt || rec.distributionDate)) : '';
       const distributedBy = isDist ? resolveStaffName(rec.distributedByStaffName || rec.distributedBy || rec.updatedBy, userRolesList) : '';

@@ -64,7 +64,7 @@ export async function downloadPdfSampleTemplate(): Promise<void> {
     "CATEGORY",
     "OLD CODE",
     "NEW CODE",
-    "VISITING DATE",
+    "DEPARTMENT",
     "RECEIVED BY",
     "DISTRIBUTED DATE",
     "DISTRIBUTED BY"
@@ -87,9 +87,8 @@ export async function downloadPdfSampleTemplate(): Promise<void> {
     if (h === "LICENSE NUMBER") {
       doc.text("LICENSE", currentX + (w / 2), startY + 3.8, { align: 'center' });
       doc.text("NUMBER", currentX + (w / 2), startY + 7.2, { align: 'center' });
-    } else if (h === "VISITING DATE") {
-      doc.text("VISITING", currentX + (w / 2), startY + 3.8, { align: 'center' });
-      doc.text("DATE", currentX + (w / 2), startY + 7.2, { align: 'center' });
+    } else if (h === "DEPARTMENT") {
+      doc.text("DEPARTMENT", currentX + (w / 2), startY + 5.5, { align: 'center' });
     } else if (h === "DISTRIBUTED DATE") {
       doc.text("DISTRIBUTED", currentX + (w / 2), startY + 3.8, { align: 'center' });
       doc.text("DATE", currentX + (w / 2), startY + 7.2, { align: 'center' });

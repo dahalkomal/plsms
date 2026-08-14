@@ -1026,6 +1026,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           } else if (norm.includes('newcode') || norm.includes('new')) {
             mapping['newCode'] = col;
           } else if (norm.includes('contactdepartment') || norm.includes('contactdeparfment') || norm.includes('contactdept') || norm.includes('department') || norm.includes('dept') || norm.includes('visit') || norm.includes('day') || norm.includes('scheduled') || norm.includes('visitdate') || norm.includes('visit_date')) {
+            mapping['department'] = col;
             mapping['contactDepartment'] = col;
             mapping['officeVisitDay'] = col;
           } else if (norm.includes('received') || norm.includes('receiver') || norm.includes('receivedby')) {
@@ -1072,7 +1073,13 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             const category = String(row[mapping['category']] || 'A').trim();
             const oldCode = String(row[mapping['oldCode']] || '').trim();
             const newCode = String(row[mapping['newCode']] || '').trim();
-            const visitDay = String(row[mapping['contactDepartment']] || row[mapping['officeVisitDay']] || 'Monday - Friday (9 AM - 4 PM)').trim();
+            const rawDept = String(
+              row[mapping['department']] || 
+              row[mapping['contactDepartment']] || 
+              row[mapping['officeVisitDay']] || 
+              ''
+            ).trim();
+            const visitDay = rawDept || 'Monday - Friday (9 AM - 4 PM)';
             const receivedBy = String(row[mapping['receivedBy']] || '').trim();
 
             const sn = row[mapping['sn']] ? Number(row[mapping['sn']]) : (j + 1);
@@ -1088,6 +1095,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               category,
               oldCode,
               newCode,
+              rawDept,
               visitDay,
               receivedBy,
               sn
@@ -1145,7 +1153,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           for (let i = 0; i < validRows.length; i += demoChunkSize) {
             const chunk = validRows.slice(i, i + demoChunkSize);
             for (const item of chunk) {
-              const { rawAppId, rawName, rawFhName, rawLicenseNo, category, oldCode, newCode, visitDay, receivedBy, sn } = item;
+              const { rawAppId, rawName, rawFhName, rawLicenseNo, category, oldCode, newCode, rawDept, visitDay, receivedBy, sn } = item;
               const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
 
               const upperNo = rawLicenseNo.toUpperCase();
@@ -1170,7 +1178,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                 fullName: rawName,
                 licenseNumber: rawLicenseNo,
                 category: category,
-                contactDepartment: visitDay,
+                department: rawDept || undefined,
+                contactDepartment: rawDept || visitDay,
                 officeVisitDay: visitDay,
                 receivedBy: receivedBy,
                 oldCode: oldCode,
@@ -1216,7 +1225,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
 
           // 1. Prepare all record objects in memory & check in-file duplicates
           for (const item of validRows) {
-            const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, visitDay, receivedBy, sn } = item;
+            const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, rawDept, visitDay, receivedBy, sn } = item;
             const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
             const upperNo = rawLicenseNo.toUpperCase();
 
@@ -1243,7 +1252,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               fullName: rawName,
               licenseNumber: rawLicenseNo,
               category: category,
-              contactDepartment: visitDay,
+              department: rawDept || undefined,
+              contactDepartment: rawDept || visitDay,
               officeVisitDay: visitDay,
               receivedBy: receivedBy,
               oldCode: oldCode,
@@ -3961,9 +3971,22 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                 );
                               }
 
+                              const chronologicalLedgers = [...uploadLedgers].sort((a, b) => {
+                                if (a.versionNumber && b.versionNumber) {
+                                  return a.versionNumber - b.versionNumber;
+                                }
+                                const tA = new Date(a.timestamp || 0).getTime();
+                                const tB = new Date(b.timestamp || 0).getTime();
+                                return tA - tB;
+                              });
+
                               return filtered.map((ledger, index) => {
                                 const isActionLoading = actionLoadingId === ledger.id;
                                 
+                                // Chronological upload lot number (S.N.)
+                                const chronoIdx = chronologicalLedgers.findIndex(l => l.id === ledger.id);
+                                const lotSN = ledger.versionNumber || (chronoIdx >= 0 ? chronoIdx + 1 : filtered.length - index);
+
                                 // Ordinal suffix for lots
                                 const getOrdinal = (n: number) => {
                                   const s = ["th", "st", "nd", "rd"];
@@ -3998,13 +4021,13 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                           : ''
                                     }`}
                                   >
-                                    <td className="py-3 px-3 font-mono text-[11px] font-bold text-center text-slate-500">{index + 1}</td>
+                                    <td className="py-3 px-3 font-mono text-[11px] font-bold text-center text-slate-500">{lotSN}</td>
                                     <td className="py-3 px-3 font-semibold text-slate-800 dark:text-slate-200">
                                       {ledger.fileName}
                                     </td>
                                     <td className="py-3 px-3 text-center">
                                       <span className="px-2 py-0.5 rounded-sm text-[9px] font-bold bg-[#FDF2E9] text-[#D35400] border border-[#F5CBA7] whitespace-nowrap">
-                                        {getOrdinal(filtered.length - index)} - LOT
+                                        {getOrdinal(lotSN)} - LOT
                                       </span>
                                     </td>
                                     <td className="py-3 px-3 text-center font-mono text-[11px] text-slate-600 dark:text-slate-400">

@@ -948,7 +948,7 @@ export interface PaginatedLicensesResult {
 }
 
 export async function getPaginatedLicenses(params: PaginatedLicensesParams): Promise<PaginatedLicensesResult> {
-  const { pageSize = 25, lastDocSnap = null, statusFilter = 'all', searchQuery = '' } = params;
+  const { pageSize = 100, lastDocSnap = null, statusFilter = 'all', searchQuery = '' } = params;
 
   if (!isDemoModeActive()) {
     try {

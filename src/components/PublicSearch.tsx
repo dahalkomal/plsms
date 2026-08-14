@@ -10,17 +10,20 @@ import { Search, Calendar, Phone, Clipboard, CheckCircle, Clock, AlertCircle, He
 import { registryDataStore } from '../registryDataStore';
 import { convertADToBS } from '../utils/dateConverter';
 
-function getNepaliWeekday(dayStr: string | undefined): string {
-  if (!dayStr) return 'आईतबार';
-  const clean = dayStr.trim().toLowerCase();
-  if (clean === 'sunday' || clean.includes('sun')) return 'आईतबार';
-  if (clean === 'monday' || clean.includes('mon')) return 'सोमबार';
-  if (clean === 'tuesday' || clean.includes('tue')) return 'मंगलबार';
-  if (clean === 'wednesday' || clean.includes('wed')) return 'बुधबार';
-  if (clean === 'thursday' || clean.includes('thu')) return 'बिहीबार';
-  if (clean === 'friday' || clean.includes('fri')) return 'शुक्रबार';
-  if (clean === 'saturday' || clean.includes('sat')) return 'शनिबार';
-  return dayStr;
+function getDepartmentDisplay(val: string | undefined): string {
+  if (!val || !val.trim()) return '---';
+  const clean = val.trim();
+  const lower = clean.toLowerCase();
+
+  if (lower === 'sunday' || lower === 'sun') return 'आईतबार';
+  if (lower === 'monday' || lower === 'mon') return 'सोमबार';
+  if (lower === 'tuesday' || lower === 'tue') return 'मंगलबार';
+  if (lower === 'wednesday' || lower === 'wed') return 'बुधबार';
+  if (lower === 'thursday' || lower === 'thu') return 'बिहीबार';
+  if (lower === 'friday' || lower === 'fri') return 'शुक्रबार';
+  if (lower === 'saturday' || lower === 'sat') return 'शनिबार';
+
+  return clean;
 }
 
 function getCodeNo(applicantId: string | undefined): string {
@@ -563,11 +566,8 @@ export default function PublicSearch({
             </div>
             <div className="space-y-0.5 sm:space-y-1.5 flex-1">
               <h4 className="text-xs xs:text-sm sm:text-lg font-black tracking-tight text-red-800 dark:text-red-400 font-sans">
-                Enter your 12 digits license number
+                {searchError}
               </h4>
-              <p className="text-[10px] xs:text-xs sm:text-base font-bold text-red-700 dark:text-red-300/90 leading-relaxed font-sans">
-                कृपया १२ अंकको सही लाइसेन्स नम्बर प्रविष्ट गर्नुहोस् (Please enter a valid 12-digit license number).
-              </p>
             </div>
           </div>
         </div>
@@ -576,380 +576,515 @@ export default function PublicSearch({
       {/* Search Result display container (Section 6 workflow) - Display Card just below Search box */}
       {searched && !searching && (
         licenseMatch ? (
-          <div className={`rounded-xl sm:rounded-3xl border shadow-2xl p-4 sm:p-8 space-y-4 sm:space-y-6 animate-fade-in transition-all duration-300 ${
-            theme === 'dark' 
-              ? 'bg-[#0f172a] border-slate-800' 
-              : 'bg-[#0284c7] border-sky-800 text-white'
-          }`}>
-            <div className="space-y-4 sm:space-y-6">
-              {/* Centered Smart Card Status Header */}
-              <div className="flex flex-col items-center justify-center text-center pb-1 sm:pb-2">
+          isLicenseDistributed(licenseMatch) ? (
+            /* ======================================================== */
+            /* CASE B: LICENSE ALREADY DISTRIBUTED (READ-ONLY REPORT CARD) */
+            /* ======================================================== */
+            <div className={`rounded-xl sm:rounded-3xl border-2 shadow-2xl p-4 sm:p-6 space-y-4 animate-fade-in transition-all duration-300 max-w-3xl mx-auto ${
+              theme === 'dark'
+                ? 'bg-[#0f172a] border-emerald-500/40 text-slate-100'
+                : 'bg-white border-emerald-600 text-slate-900 shadow-emerald-500/10'
+            }`}>
+              {/* Header Status Banner */}
+              <div className={`p-3.5 sm:p-4 rounded-xl sm:rounded-2xl border text-center space-y-1 ${
+                theme === 'dark'
+                  ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-300'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}>
                 <div className="flex items-center justify-center gap-2">
-                  <span className={`text-xl sm:text-2xl font-black ${theme === 'dark' ? 'text-[#10b981]' : 'text-white'}`}>✓</span>
-                  <span className={`text-base sm:text-xl font-black tracking-wide uppercase ${theme === 'dark' ? 'text-[#10b981]' : 'text-white'}`}>
-                    Smart Card Found
+                  <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="text-base sm:text-xl font-black font-sans tracking-wide">
+                    ✓ लाइसेन्स कार्ड वितरण भइसकेको छ
                   </span>
                 </div>
+                <p className="text-xs sm:text-sm font-black tracking-wider uppercase text-emerald-700 dark:text-emerald-400 font-sans">
+                  LICENSE ALREADY DISTRIBUTED
+                </p>
               </div>
 
-              {/* Styled Bento Grid from second picture */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
-                {/* 1. APPLICANT ID */}
-                <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
-                  theme === 'dark' 
-                    ? 'bg-slate-950/40 border-slate-800' 
-                    : 'bg-[#fce7f3] border-2 border-black shadow-md'
+              {/* Compact Read-Only Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* 1. LICENSE NUMBER */}
+                <div className={`p-3 rounded-xl border ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
-                  <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
-                    theme === 'dark' 
-                      ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
-                      : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
-                  }`}>
-                    APPLICANT ID
-                  </span>
-                  <span 
-                    className={`block font-mono tracking-wide uppercase ${
-                      theme === 'dark' 
-                        ? 'text-cyan-400 font-black text-sm xs:text-base sm:text-xl' 
-                        : 'text-blue-600 font-black text-base xs:text-xl sm:text-2xl'
-                    }`}
-                    style={{ fontWeight: 900 }}
-                  >
-                    {licenseMatch.applicantId}
-                  </span>
-                </div>
-
-                {/* 2. FULL NAME */}
-                <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
-                  theme === 'dark' 
-                    ? 'bg-slate-950/40 border-slate-800' 
-                    : 'bg-[#fce7f3] border-2 border-black shadow-md'
-                }`}>
-                  <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
-                    theme === 'dark' 
-                      ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
-                      : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
-                  }`}>
-                    FULL NAME
-                  </span>
-                  <span className={`block tracking-wide uppercase ${
-                    theme === 'dark' 
-                      ? 'text-blue-400 font-black text-sm xs:text-base sm:text-lg' 
-                      : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
-                  }`}>
-                    {licenseMatch.fullName}
-                  </span>
-                </div>
-
-                {/* 3. LICENSE NUMBER */}
-                <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
-                  theme === 'dark' 
-                    ? 'bg-slate-950/40 border-slate-800' 
-                    : 'bg-[#fce7f3] border-2 border-black shadow-md'
-                }`}>
-                  <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
-                    theme === 'dark' 
-                      ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
-                      : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
-                  }`}>
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                     LICENSE NUMBER
                   </span>
-                  <span 
-                    className={`block font-mono tracking-wide uppercase ${
-                      theme === 'dark' 
-                        ? 'text-cyan-400 font-black text-sm xs:text-base sm:text-xl' 
-                        : 'text-blue-600 font-black text-base xs:text-xl sm:text-2xl'
-                    }`}
-                    style={{ fontWeight: 900 }}
-                  >
+                  <span className="block font-mono text-sm sm:text-base font-black text-blue-600 dark:text-cyan-400 mt-0.5">
                     {licenseMatch.licenseNumber}
                   </span>
                 </div>
 
-                {/* 4. CATEGORY */}
-                <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
-                  theme === 'dark' 
-                    ? 'bg-slate-950/40 border-slate-800' 
-                    : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                {/* 2. LICENSE HOLDER */}
+                <div className={`p-3 rounded-xl border ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
-                  <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
-                    theme === 'dark' 
-                      ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
-                      : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
-                  }`}>
-                    CATEGORY
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    LICENSE HOLDER (APPLICANT)
                   </span>
-                  <span 
-                    className={`block tracking-wide uppercase ${
-                      theme === 'dark' 
-                        ? 'text-emerald-400 font-black text-sm xs:text-base sm:text-xl' 
-                        : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
-                    }`}
-                    style={{ fontWeight: 900 }}
-                  >
-                    {licenseMatch.category || 'N/A'}
+                  <span className="block text-sm sm:text-base font-black uppercase text-slate-900 dark:text-slate-100 mt-0.5">
+                    {licenseMatch.fullName}
                   </span>
                 </div>
 
-                {/* 5. CODE NO */}
-                <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
-                  theme === 'dark' 
-                    ? 'bg-slate-950/40 border-slate-800' 
-                    : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                {/* 3. APPLICANT ID & CATEGORY */}
+                <div className={`p-3 rounded-xl border ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
-                  <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
-                    theme === 'dark' 
-                      ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
-                      : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
-                  }`}>
-                    CODE NO
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    APPLICANT ID / CATEGORY
                   </span>
-                  <span className={`block font-mono tracking-wide uppercase ${
-                    theme === 'dark' 
-                      ? 'text-blue-400 font-black text-sm xs:text-base sm:text-xl' 
-                      : 'text-blue-600 font-black text-base xs:text-xl sm:text-2xl'
-                  }`}
-                  style={{ fontWeight: 900 }}
-                  >
-                    {isOfficeUser ? (
-                      isLicenseDistributed(licenseMatch) ? (
-                        licenseMatch.oldCode || licenseMatch.newCode ? (
-                          <>
-                            <span>{licenseMatch.oldCode || '---'}</span>
-                            <span className="mx-1 text-slate-400 font-normal">/</span>
-                            <span className="text-red-500 dark:text-red-500">{licenseMatch.newCode || '---'}</span>
-                          </>
-                        ) : (
-                          <span className="text-red-500 dark:text-red-500">{getCodeNo(licenseMatch.applicantId)}</span>
-                        )
-                      ) : (
-                        <span className="text-slate-400 dark:text-slate-500 text-xs font-semibold tracking-normal normal-case animate-pulse">
-                          LOCKED (SAVE REQUIRED)
-                        </span>
-                      )
-                    ) : (
-                      <span className="text-slate-400 dark:text-slate-500 text-xs font-semibold tracking-normal normal-case">
-                        OFFICE ONLY
-                      </span>
-                    )}
+                  <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200 mt-0.5">
+                    {licenseMatch.applicantId} {licenseMatch.category ? `(${licenseMatch.category})` : ''}
                   </span>
                 </div>
 
-                {/* 6. VISITING DAY */}
-                <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
-                  theme === 'dark' 
-                    ? 'bg-slate-950/40 border-slate-800' 
-                    : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                {/* 4. CODE NO & DEPARTMENT */}
+                <div className={`p-3 rounded-xl border ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
-                  <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
-                    theme === 'dark' 
-                      ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
-                      : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
-                  }`}>
-                    VISITING DAY
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    CODE NO / DEPARTMENT
                   </span>
-                  <span className={`block tracking-wide ${
-                    theme === 'dark' 
-                      ? 'text-purple-400 font-black text-sm xs:text-base sm:text-lg' 
-                      : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
-                  }`}>
-                    {getNepaliWeekday(licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
+                  <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-purple-400 mt-0.5">
+                    {licenseMatch.oldCode || licenseMatch.newCode
+                      ? `${licenseMatch.oldCode || '---'} / ${licenseMatch.newCode || '---'}`
+                      : getCodeNo(licenseMatch.applicantId)}{' '}
+                    • {getDepartmentDisplay(licenseMatch.department || licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
+                  </span>
+                </div>
+
+                {/* 5. RECIPIENT / RECEIVED BY */}
+                <div className={`p-3 rounded-xl border sm:col-span-2 ${
+                  theme === 'dark' ? 'bg-emerald-950/30 border-emerald-800/60' : 'bg-emerald-50/70 border-emerald-300'
+                }`}>
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                    RECEIVED BY (बुझिलिने व्यक्ति)
+                  </span>
+                  <span className="block text-sm sm:text-base font-black text-emerald-800 dark:text-emerald-300 mt-0.5">
+                    {licenseMatch.receivedBy || licenseMatch.submittedDocsReceiverName || '---'}
+                  </span>
+                </div>
+
+                {/* 6. DISTRIBUTED BY */}
+                <div className={`p-3 rounded-xl border ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    DISTRIBUTED BY (बुझाउने व्यक्ति)
+                  </span>
+                  <span className="block text-xs sm:text-sm font-black uppercase text-indigo-700 dark:text-cyan-400 mt-0.5">
+                    {licenseMatch.distributedByStaffName || resolveOperatorName(licenseMatch.updatedBy || '') || licenseMatch.distributedBy || 'Public Handover Desk'}
+                  </span>
+                </div>
+
+                {/* 7. DISTRIBUTION DATE */}
+                <div className={`p-3 rounded-xl border ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    DISTRIBUTION DATE (वितरण मिति)
+                  </span>
+                  <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200 mt-0.5">
+                    {licenseMatch.distributedDate || licenseMatch.submittedDocsSavedDate || (licenseMatch.updatedAt ? convertADToBS(licenseMatch.updatedAt) : '---')}
+                    {licenseMatch.submittedDocsSavedTime ? ` [${licenseMatch.submittedDocsSavedTime}]` : ''}
+                  </span>
+                </div>
+
+                {/* 8. SUBMITTED DOCUMENTS */}
+                <div className={`p-3 rounded-xl border sm:col-span-2 ${
+                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    SUBMITTED DOCUMENTS (पेस गरिएका कागजातहरू)
+                  </span>
+                  <span className="block text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-200 mt-0.5">
+                    {licenseMatch.submittedDocs && licenseMatch.submittedDocs.length > 0
+                      ? licenseMatch.submittedDocs.join(', ')
+                      : 'None'}
                   </span>
                 </div>
               </div>
-
-              {/* Direct Handover Desk Box at bottom of Found License */}
-              {isOfficeUser && (() => {
-                const isSuperUser = currentRole === 'superuser';
-                const hasSavedReceiver = !!licenseMatch.receivedBy?.trim();
-                const isInputDisabled = hasSavedReceiver && !isSuperUser;
-                return (
-                  <div className={`p-4 sm:p-5 rounded-2xl border transition-all mt-4 sm:mt-6 ${
-                    theme === 'dark' ? 'bg-slate-900/60 border-amber-500/20' : 'bg-amber-50/25 border-amber-200'
-                  }`}>
-                    <p className={`text-xs font-semibold leading-relaxed mb-3 ${
-                      theme === 'dark' ? 'text-slate-300' : 'text-slate-700'
-                    }`}>
-                      लाइसेन्स लिन आउने वा बुझिलिने व्यक्तिको नाम तलको कोठामा लेख्नुहोस् र सुरक्षित गर्नुहोस् ।
-                    </p>
-
-                    <div className="space-y-3">
-                      <HistoryAutocompleteField
-                        historyKey="handover_name_history"
-                        type="text"
-                        placeholder="बुझिलिनेको नाम लेख्नुहोस्............"
-                        value={collectorName}
-                        onChange={(e) => setCollectorName(e.target.value)}
-                        disabled={isInputDisabled}
-                        className={`w-full px-4 py-3 text-xs sm:text-sm font-semibold border rounded-xl outline-hidden focus:border-amber-500 transition-all ${
-                          theme === 'dark' 
-                            ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-600 font-bold' 
-                            : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 font-semibold'
-                        } ${isInputDisabled ? 'opacity-60 cursor-not-allowed bg-slate-950/20' : ''}`}
-                        theme={theme}
-                      />
-
-                      {/* 4 Action Buttons Row */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 pt-1">
-                        {/* Button 1: Reset Input */}
-                        <button
-                          type="button"
-                          disabled={isInputDisabled}
-                          onClick={() => setCollectorName('')}
-                          className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer text-center border disabled:opacity-40 disabled:cursor-not-allowed ${
-                            theme === 'dark'
-                              ? 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700'
-                              : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
-                          }`}
-                        >
-                          रिसेट (RESET) गर्नुहोस्
-                        </button>
-
-                        {/* Button 2: Use Driver Name */}
-                        <button
-                          type="button"
-                          disabled={isInputDisabled}
-                          onClick={() => setCollectorName(licenseMatch.fullName)}
-                          className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer text-center border disabled:opacity-40 disabled:cursor-not-allowed ${
-                            theme === 'dark'
-                              ? 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700'
-                              : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
-                          }`}
-                        >
-                          सवारी चालकको नाम प्रयोग गर्नुहोस्
-                        </button>
-
-                        {/* Button 3: Submitted Documents */}
-                        <button
-                          type="button"
-                          onClick={handleOpenDocsModal}
-                          className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
-                            theme === 'dark'
-                              ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                              : 'bg-blue-500 hover:bg-blue-600 text-white'
-                          }`}
-                        >
-                          📄 Submitted Documents
-                        </button>
-
-                        {/* Button 4: Save */}
-                        <button
-                          type="button"
-                          disabled={isInputDisabled}
-                          onClick={async () => {
-                            if (!isSuperUser && !collectorName.trim()) {
-                              alert("कृपया बुझिलिनेको नाम लेख्नुहोस् !");
-                              return;
-                            }
-
-                            const effectiveDocs = modalSelectedDocs.length > 0 ? modalSelectedDocs : (licenseMatch.submittedDocs || []);
-                            if (effectiveDocs.length === 0) {
-                              alert("कृपया पहिले 'Submitted Documents' बटनमा थिचेर कम्तीमा एउटा पेस गरिएको कागजात अनिवार्य चयन (Tick) गर्नुहोस् !");
-                              handleOpenDocsModal();
-                              return;
-                            }
-
-                            try {
-                              const { email: staffEmail, displayName: staffName } = getLoggedInStaffInfo();
-                              const finalEmail = staffEmail || 'Public Search Handover Desk';
-                              const finalName = staffName || 'Public Handover Desk';
-                              const now = new Date();
-                              const savedDate = convertADToBS(now);
-                              const savedTime = now.toLocaleTimeString('en-US', { hour12: true });
-                              
-                              const finalStatus = collectorName.trim() ? 'distributed' as const : 'available' as const;
-                              
-                              const updated = {
-                                ...licenseMatch,
-                                status: finalStatus,
-                                receivedBy: collectorName.trim(),
-                                submittedDocs: effectiveDocs,
-                                submittedDocsOther: '',
-                                recommendedStaffName: modalSelectedDocs.includes('Office Staff Recommendation') 
-                                  ? modalRecommendedStaffName.trim() 
-                                  : (licenseMatch.recommendedStaffName || licenseMatch.recommended_staff_name || ''),
-                                recommended_staff_name: modalSelectedDocs.includes('Office Staff Recommendation') 
-                                  ? modalRecommendedStaffName.trim() 
-                                  : (licenseMatch.recommendedStaffName || licenseMatch.recommended_staff_name || ''),
-                                submittedDocsReceiverName: collectorName.trim(),
-                                submittedDocsSavedBy: licenseMatch.submittedDocsSavedBy || finalEmail,
-                                submittedDocsSavedDate: licenseMatch.submittedDocsSavedDate || savedDate,
-                                submittedDocsSavedTime: licenseMatch.submittedDocsSavedTime || savedTime,
-                                distributedDate: licenseMatch.distributedDate || savedDate,
-                                updatedAt: now.toISOString(),
-                                updatedBy: finalEmail,
-                                distributedByStaffName: finalName
-                              };
-
-                              await createOrUpdateLicense(licenseMatch.id, updated);
-                              setLicenseMatch(updated);
-                              HistorySuggestionService.saveValue('handover_name_history', collectorName.trim());
-                              setSuccessNotification("विवरण सफलतापूर्वक सुरक्षित भयो!");
-                              setTimeout(() => setSuccessNotification(null), 5000);
-                            } catch (err: any) {
-                              alert("त्रुटि: विवरण सुरक्षित गर्न सकिएन: " + err.message);
-                            }
-                          }}
-                          className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-lg transition-all cursor-pointer text-center disabled:opacity-40 disabled:cursor-not-allowed ${
-                            theme === 'dark'
-                              ? 'bg-amber-600 hover:bg-amber-500 text-white'
-                              : 'bg-amber-500 hover:bg-amber-600 text-white'
-                          }`}
-                        >
-                          सुरक्षित गर्नुहोस् (SAVE)
-                        </button>
-                      </div>
-
-                      {/* Handover Summary Confirmation Message Box directly below 4 buttons */}
-                      {hasSavedReceiver && (
-                        <div className={`mt-3.5 p-3.5 sm:p-4 rounded-xl border transition-all animate-fade-in ${
-                          theme === 'dark' ? 'bg-blue-955/50 border-blue-800/60 text-blue-100' : 'bg-blue-50/90 border-blue-200 text-blue-950 shadow-xs'
-                        }`}>
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <CheckCircle className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400 shrink-0" />
-                            <span className="font-black text-xs sm:text-sm uppercase tracking-wider text-blue-700 dark:text-blue-400 font-sans">
-                              ✔️ विवरण सुरक्षित भइसकेको जानकारी (Handover Details)
-                            </span>
-                          </div>
-                          <div className="space-y-1 text-xs sm:text-sm font-extrabold font-sans leading-relaxed">
-                            <p>
-                              तपाईंको लाइसेन्स <span className="underline decoration-2 text-amber-600 dark:text-amber-400 font-black px-1">{licenseMatch.receivedBy || 'सम्बन्धित व्यक्ति'}</span> ले बुझिसक्नुभएको छ।
-                            </p>
-                            <p className="text-slate-700 dark:text-slate-300 font-semibold">
-                              बुझाउने व्यक्ति (DISTRIBUTED BY): <strong className="text-cyan-700 dark:text-cyan-400 font-black uppercase tracking-wider px-1">
-                                {licenseMatch.distributedByStaffName || resolveOperatorName(licenseMatch.updatedBy || '') || 'Public Handover Desk'}
-                              </strong>
-                              {(licenseMatch.submittedDocsSavedDate || licenseMatch.updatedDate) && (
-                                <span className="ml-2 font-bold text-slate-500 dark:text-slate-400">[{convertADToBS(licenseMatch.submittedDocsSavedDate || licenseMatch.updatedDate)}]</span>
-                              )}
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* For general public, display the customized visiting/availability message, and omit the handover desk interface */}
-              {!isOfficeUser && (
-                <div className={`p-3 xs:p-4 sm:p-6 rounded-xl sm:rounded-2xl border transition-all mt-3 sm:mt-6 ${
-                  theme === 'dark' 
-                    ? 'bg-slate-900/40 border-emerald-500/20 text-emerald-100' 
-                    : 'bg-gradient-to-r from-emerald-50/80 to-teal-50/50 border-emerald-200 text-emerald-950 shadow-xs'
-                }`}>
-                  <p className="text-[11px] xs:text-xs sm:text-base font-extrabold leading-relaxed text-center py-0.5 sm:py-1 font-sans">
-                    तपाईको स्मार्ट कार्ड कार्यालयमा उपलब्ध छ । उक्त कार्ड लिनको लागि{' '}
-                    <strong className="text-red-600 dark:text-red-400 font-black text-xs xs:text-sm sm:text-xl px-1 underline decoration-2 decoration-red-300 inline-block">
-                      {getNepaliWeekday(licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
-                    </strong>{' '}
-                    आउनुहुन जानकारी गराईन्छ ।
-                  </p>
-                </div>
-              )}
             </div>
-          </div>
-        ) : (
+          ) : (
+            /* ======================================================== */
+            /* CASE A: LICENSE NOT YET DISTRIBUTED (NORMAL FULL DISPLAY) */
+            /* ======================================================== */
+            <div className={`rounded-xl sm:rounded-3xl border shadow-2xl p-4 sm:p-8 space-y-4 sm:space-y-6 animate-fade-in transition-all duration-300 ${
+              theme === 'dark' 
+                ? 'bg-[#0f172a] border-slate-800' 
+                : 'bg-[#0284c7] border-sky-800 text-white'
+            }`}>
+              <div className="space-y-4 sm:space-y-6">
+                {/* Centered Smart Card Status Header */}
+                <div className="flex flex-col items-center justify-center text-center pb-1 sm:pb-2">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className={`text-xl sm:text-2xl font-black ${theme === 'dark' ? 'text-[#10b981]' : 'text-white'}`}>✓</span>
+                    <span className={`text-base sm:text-xl font-black tracking-wide uppercase ${theme === 'dark' ? 'text-[#10b981]' : 'text-white'}`}>
+                      Smart Card Found
+                    </span>
+                  </div>
+                </div>
+
+                {/* Styled Bento Grid from second picture */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
+                  {/* 1. APPLICANT ID */}
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/40 border-slate-800' 
+                      : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                  }`}>
+                    <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
+                      theme === 'dark' 
+                        ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
+                        : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
+                    }`}>
+                      APPLICANT ID
+                    </span>
+                    <span 
+                      className={`block font-mono tracking-wide uppercase ${
+                        theme === 'dark' 
+                          ? 'text-cyan-400 font-black text-sm xs:text-base sm:text-xl' 
+                          : 'text-blue-600 font-black text-base xs:text-xl sm:text-2xl'
+                      }`}
+                      style={{ fontWeight: 900 }}
+                    >
+                      {licenseMatch.applicantId}
+                    </span>
+                  </div>
+
+                  {/* 2. FULL NAME */}
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/40 border-slate-800' 
+                      : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                  }`}>
+                    <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
+                      theme === 'dark' 
+                        ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
+                        : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
+                    }`}>
+                      FULL NAME
+                    </span>
+                    <span className={`block tracking-wide uppercase ${
+                      theme === 'dark' 
+                        ? 'text-blue-400 font-black text-sm xs:text-base sm:text-lg' 
+                        : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
+                    }`}>
+                      {licenseMatch.fullName}
+                    </span>
+                  </div>
+
+                  {/* 3. LICENSE NUMBER */}
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/40 border-slate-800' 
+                      : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                  }`}>
+                    <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
+                      theme === 'dark' 
+                        ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
+                        : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
+                    }`}>
+                      LICENSE NUMBER
+                    </span>
+                    <span 
+                      className={`block font-mono tracking-wide uppercase ${
+                        theme === 'dark' 
+                          ? 'text-cyan-400 font-black text-sm xs:text-base sm:text-xl' 
+                          : 'text-blue-600 font-black text-base xs:text-xl sm:text-2xl'
+                      }`}
+                      style={{ fontWeight: 900 }}
+                    >
+                      {licenseMatch.licenseNumber}
+                    </span>
+                  </div>
+
+                  {/* 4. CATEGORY */}
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/40 border-slate-800' 
+                      : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                  }`}>
+                    <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
+                      theme === 'dark' 
+                        ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
+                        : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
+                    }`}>
+                      CATEGORY
+                    </span>
+                    <span 
+                      className={`block tracking-wide uppercase ${
+                        theme === 'dark' 
+                          ? 'text-emerald-400 font-black text-sm xs:text-base sm:text-xl' 
+                          : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
+                      }`}
+                      style={{ fontWeight: 900 }}
+                    >
+                      {licenseMatch.category || 'N/A'}
+                    </span>
+                  </div>
+
+                  {/* 5. CODE NO */}
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/40 border-slate-800' 
+                      : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                  }`}>
+                    <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
+                      theme === 'dark' 
+                        ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
+                        : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
+                    }`}>
+                      CODE NO
+                    </span>
+                    <span className={`block font-mono tracking-wide uppercase ${
+                      theme === 'dark' 
+                        ? 'text-blue-400 font-black text-sm xs:text-base sm:text-xl' 
+                        : 'text-blue-600 font-black text-base xs:text-xl sm:text-2xl'
+                    }`}
+                    style={{ fontWeight: 900 }}
+                    >
+                      {isOfficeUser ? (
+                        isLicenseDistributed(licenseMatch) ? (
+                          licenseMatch.oldCode || licenseMatch.newCode ? (
+                            <>
+                              <span>{licenseMatch.oldCode || '---'}</span>
+                              <span className="mx-1 text-slate-400 font-normal">/</span>
+                              <span className="text-red-500 dark:text-red-500">{licenseMatch.newCode || '---'}</span>
+                            </>
+                          ) : (
+                            <span className="text-red-500 dark:text-red-500">{getCodeNo(licenseMatch.applicantId)}</span>
+                          )
+                        ) : (
+                          <span className="text-slate-400 dark:text-slate-500 text-xs font-semibold tracking-normal normal-case animate-pulse">
+                            LOCKED (SAVE REQUIRED)
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-slate-400 dark:text-slate-500 text-xs font-semibold tracking-normal normal-case">
+                          OFFICE ONLY
+                        </span>
+                      )}
+                    </span>
+                  </div>
+
+                  {/* 6. DEPARTMENT */}
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center text-center transition-all ${
+                    theme === 'dark' 
+                      ? 'bg-slate-950/40 border-slate-800' 
+                      : 'bg-[#fce7f3] border-2 border-black shadow-md'
+                  }`}>
+                    <span className={`block uppercase tracking-widest mb-1 sm:mb-1.5 ${
+                      theme === 'dark' 
+                        ? 'text-[9px] xs:text-[10px] sm:text-[11px] font-extrabold text-slate-400' 
+                        : 'text-sm xs:text-base sm:text-lg text-slate-800 font-black'
+                    }`}>
+                      DEPARTMENT
+                    </span>
+                    <span className={`block tracking-wide ${
+                      theme === 'dark' 
+                        ? 'text-purple-400 font-black text-sm xs:text-base sm:text-lg' 
+                        : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
+                    }`}>
+                      {getDepartmentDisplay(licenseMatch.department || licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Direct Handover Desk Box at bottom of Found License */}
+                {isOfficeUser && (() => {
+                  const isSuperUser = currentRole === 'superuser';
+                  const hasSavedReceiver = !!licenseMatch.receivedBy?.trim();
+                  const isInputDisabled = hasSavedReceiver && !isSuperUser;
+                  return (
+                    <div className={`p-4 sm:p-5 rounded-2xl border transition-all mt-4 sm:mt-6 ${
+                      theme === 'dark' ? 'bg-slate-900/60 border-amber-500/20' : 'bg-amber-50/25 border-amber-200'
+                    }`}>
+                      <p className={`text-xs font-semibold leading-relaxed mb-3 ${
+                        theme === 'dark' ? 'text-slate-300' : 'text-slate-700'
+                      }`}>
+                        लाइसेन्स लिन आउने वा बुझिलिने व्यक्तिको नाम तलको कोठामा लेख्नुहोस् र सुरक्षित गर्नुहोस् ।
+                      </p>
+
+                      <div className="space-y-3">
+                        <HistoryAutocompleteField
+                          historyKey="handover_name_history"
+                          type="text"
+                          placeholder="बुझिलिनेको नाम लेख्नुहोस्............"
+                          value={collectorName}
+                          onChange={(e) => setCollectorName(e.target.value)}
+                          disabled={isInputDisabled}
+                          className={`w-full px-4 py-3 text-xs sm:text-sm font-semibold border rounded-xl outline-hidden focus:border-amber-500 transition-all ${
+                            theme === 'dark' 
+                              ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-600 font-bold' 
+                              : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 font-semibold'
+                          } ${isInputDisabled ? 'opacity-60 cursor-not-allowed bg-slate-950/20' : ''}`}
+                          theme={theme}
+                        />
+
+                        {/* 4 Action Buttons Row */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 pt-1">
+                          {/* Button 1: Reset Input */}
+                          <button
+                            type="button"
+                            disabled={isInputDisabled}
+                            onClick={() => setCollectorName('')}
+                            className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer text-center border disabled:opacity-40 disabled:cursor-not-allowed ${
+                              theme === 'dark'
+                                ? 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700'
+                                : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
+                            }`}
+                          >
+                            रिसेट (RESET) गर्नुहोस्
+                          </button>
+
+                          {/* Button 2: Use Driver Name */}
+                          <button
+                            type="button"
+                            disabled={isInputDisabled}
+                            onClick={() => setCollectorName(licenseMatch.fullName)}
+                            className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer text-center border disabled:opacity-40 disabled:cursor-not-allowed ${
+                              theme === 'dark'
+                                ? 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700'
+                                : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
+                            }`}
+                          >
+                            सवारी चालकको नाम प्रयोग गर्नुहोस्
+                          </button>
+
+                          {/* Button 3: Submitted Documents */}
+                          <button
+                            type="button"
+                            onClick={handleOpenDocsModal}
+                            className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                              theme === 'dark'
+                                ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                                : 'bg-blue-500 hover:bg-blue-600 text-white'
+                            }`}
+                          >
+                            📄 Submitted Documents
+                          </button>
+
+                          {/* Button 4: Save */}
+                          <button
+                            type="button"
+                            disabled={isInputDisabled}
+                            onClick={async () => {
+                              if (!isSuperUser && !collectorName.trim()) {
+                                alert("कृपया बुझिलिनेको नाम लेख्नुहोस् !");
+                                return;
+                              }
+
+                              const effectiveDocs = modalSelectedDocs.length > 0 ? modalSelectedDocs : (licenseMatch.submittedDocs || []);
+                              if (effectiveDocs.length === 0) {
+                                alert("कृपया पहिले 'Submitted Documents' बटनमा थिचेर कम्तीमा एउटा पेस गरिएको कागजात अनिवार्य चयन (Tick) गर्नुहोस् !");
+                                handleOpenDocsModal();
+                                return;
+                              }
+
+                              try {
+                                const { email: staffEmail, displayName: staffName } = getLoggedInStaffInfo();
+                                const finalEmail = staffEmail || 'Public Search Handover Desk';
+                                const finalName = staffName || 'Public Handover Desk';
+                                const now = new Date();
+                                const savedDate = convertADToBS(now);
+                                const savedTime = now.toLocaleTimeString('en-US', { hour12: true });
+                                
+                                const finalStatus = collectorName.trim() ? 'distributed' as const : 'available' as const;
+                                
+                                const updated = {
+                                  ...licenseMatch,
+                                  status: finalStatus,
+                                  receivedBy: collectorName.trim(),
+                                  submittedDocs: effectiveDocs,
+                                  submittedDocsOther: '',
+                                  recommendedStaffName: modalSelectedDocs.includes('Office Staff Recommendation') 
+                                    ? modalRecommendedStaffName.trim() 
+                                    : (licenseMatch.recommendedStaffName || licenseMatch.recommended_staff_name || ''),
+                                  recommended_staff_name: modalSelectedDocs.includes('Office Staff Recommendation') 
+                                    ? modalRecommendedStaffName.trim() 
+                                    : (licenseMatch.recommendedStaffName || licenseMatch.recommended_staff_name || ''),
+                                  submittedDocsReceiverName: collectorName.trim(),
+                                  submittedDocsSavedBy: licenseMatch.submittedDocsSavedBy || finalEmail,
+                                  submittedDocsSavedDate: licenseMatch.submittedDocsSavedDate || savedDate,
+                                  submittedDocsSavedTime: licenseMatch.submittedDocsSavedTime || savedTime,
+                                  distributedDate: licenseMatch.distributedDate || savedDate,
+                                  updatedAt: now.toISOString(),
+                                  updatedBy: finalEmail,
+                                  distributedByStaffName: finalName
+                                };
+
+                                await createOrUpdateLicense(licenseMatch.id, updated);
+                                setLicenseMatch(updated);
+                                HistorySuggestionService.saveValue('handover_name_history', collectorName.trim());
+                                setSuccessNotification("विवरण सफलतापूर्वक सुरक्षित भयो!");
+                                setTimeout(() => setSuccessNotification(null), 5000);
+                              } catch (err: any) {
+                                alert("त्रुटि: विवरण सुरक्षित गर्न सकिएन: " + err.message);
+                              }
+                            }}
+                            className={`w-full py-2.5 px-2.5 font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-lg transition-all cursor-pointer text-center disabled:opacity-40 disabled:cursor-not-allowed ${
+                              theme === 'dark'
+                                ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                                : 'bg-amber-500 hover:bg-amber-600 text-white'
+                            }`}
+                          >
+                            सुरक्षित गर्नुहोस् (SAVE)
+                          </button>
+                        </div>
+
+                        {/* Handover Summary Confirmation Message Box directly below 4 buttons */}
+                        {hasSavedReceiver && (
+                          <div className={`mt-3.5 p-3.5 sm:p-4 rounded-xl border transition-all animate-fade-in ${
+                            theme === 'dark' ? 'bg-blue-955/50 border-blue-800/60 text-blue-100' : 'bg-blue-50/90 border-blue-200 text-blue-950 shadow-xs'
+                          }`}>
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <CheckCircle className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                              <span className="font-black text-xs sm:text-sm uppercase tracking-wider text-blue-700 dark:text-blue-400 font-sans">
+                                ✔️ विवरण सुरक्षित भइसकेको जानकारी (Handover Details)
+                              </span>
+                            </div>
+                            <div className="space-y-1 text-xs sm:text-sm font-extrabold font-sans leading-relaxed">
+                              <p>
+                                तपाईंको लाइसेन्स <span className="underline decoration-2 text-amber-600 dark:text-amber-400 font-black px-1">{licenseMatch.receivedBy || 'सम्बन्धित व्यक्ति'}</span> ले बुझिसक्नुभएको छ।
+                              </p>
+                              <p className="text-slate-700 dark:text-slate-300 font-semibold">
+                                बुझाउने व्यक्ति (DISTRIBUTED BY): <strong className="text-cyan-700 dark:text-cyan-400 font-black uppercase tracking-wider px-1">
+                                  {licenseMatch.distributedByStaffName || resolveOperatorName(licenseMatch.updatedBy || '') || 'Public Handover Desk'}
+                                </strong>
+                                {(licenseMatch.submittedDocsSavedDate || licenseMatch.updatedDate) && (
+                                  <span className="ml-2 font-bold text-slate-500 dark:text-slate-400">[{convertADToBS(licenseMatch.submittedDocsSavedDate || licenseMatch.updatedDate)}]</span>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* For general public, display the customized visiting/availability message, and omit the handover desk interface */}
+                {!isOfficeUser && (
+                  <div className={`p-3 xs:p-4 sm:p-6 rounded-xl sm:rounded-2xl border transition-all mt-3 sm:mt-6 ${
+                    theme === 'dark' 
+                      ? 'bg-slate-900/40 border-emerald-500/20 text-emerald-100' 
+                      : 'bg-gradient-to-r from-emerald-50/80 to-teal-50/50 border-emerald-200 text-emerald-950 shadow-xs'
+                  }`}>
+                    <p className="text-[11px] xs:text-xs sm:text-base font-extrabold leading-relaxed text-center py-0.5 sm:py-1 font-sans">
+                      तपाईको स्मार्ट कार्ड कार्यालयमा उपलब्ध छ । उक्त कार्ड लिनको लागि{' '}
+                      <strong className="text-red-600 dark:text-red-400 font-black text-xs xs:text-sm sm:text-xl px-1 underline decoration-2 decoration-red-300 inline-block">
+                        {getDepartmentDisplay(licenseMatch.department || licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
+                      </strong>{' '}
+                      आउनुहुन जानकारी गराईन्छ ।
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )) : (
           /* Detailed Not Found Box exactly as requested */
           <div className={`mt-4 sm:mt-6 p-4 sm:p-6 rounded-xl sm:rounded-3xl border transition-all animate-fade-in ${
             theme === 'dark' 

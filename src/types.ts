@@ -16,6 +16,7 @@ export interface License {
   fatherHusbandName?: string;
   licenseNumber: string;
   category?: string;
+  department?: string;
   contactDepartment?: string;
   officeVisitDay?: string;
   receivedBy?: string;

@@ -139,9 +139,9 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   const [serverTotalCount, setServerTotalCount] = useState<number>(0);
   const [pageDocSnaps, setPageDocSnaps] = useState<(any | null)[]>([null]);
   
-  // Pagination states (Default Page Size = 25)
+  // Pagination states (Default Page Size = 100)
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(25);
+  const [pageSize, setPageSize] = useState<number>(100);
 
   // Tab/Register view
   const [activeRegister, setActiveRegister] = useState<LicenseStatus | 'not_distributed'>('available');
@@ -328,7 +328,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       setServerKpiCounts(kpis);
 
       // Step 2 & Step 4: Refresh the first visible table page using current page size
-      const currentSize = pageSize > 0 ? pageSize : 25;
+      const currentSize = pageSize > 0 ? pageSize : 100;
       const paginatedRes = await getPaginatedLicenses({
         pageSize: currentSize,
         lastDocSnap: null,
@@ -384,7 +384,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       // 2. Fetch initial page of records using Firestore server-side pagination
       try {
         const paginatedRes = await getPaginatedLicenses({
-          pageSize: 25,
+          pageSize: pageSize || 100,
           statusFilter: activeRegister,
           searchQuery
         });
@@ -2498,7 +2498,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                 }`}>
                   <div className="flex items-center gap-3 text-xs font-medium">
                     <span className="whitespace-nowrap">
-                      Showing {pageSize === 0 ? 1 : Math.min((currentPage - 1) * pageSize + 1, filteredLicenses.length)} to {pageSize === 0 ? filteredLicenses.length : Math.min(currentPage * pageSize, filteredLicenses.length)} of <strong className="font-bold">{filteredLicenses.length}</strong> records
+                      Showing {pageSize === 0 ? 1 : Math.min((currentPage - 1) * pageSize + 1, serverTotalCount)} to {pageSize === 0 ? serverTotalCount : Math.min(currentPage * pageSize, serverTotalCount)} of <strong className="font-bold">{serverTotalCount}</strong> records
                     </span>
                     <div className="flex items-center gap-1.5 ml-2">
                       <span className="text-[11px] opacity-75 font-sans">Per page:</span>
