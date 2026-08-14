@@ -609,7 +609,7 @@ export default function PublicSearch({
                   theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
                   <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    LICENSE NUMBER
+                    LICENSE NUMBER (लाइसेन्स नं.)
                   </span>
                   <span className="block font-mono text-sm sm:text-base font-black text-blue-600 dark:text-cyan-400 mt-0.5">
                     {licenseMatch.licenseNumber}
@@ -621,37 +621,34 @@ export default function PublicSearch({
                   theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
                   <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    LICENSE HOLDER (APPLICANT)
+                    LICENSE HOLDER (सवारी चालक)
                   </span>
                   <span className="block text-sm sm:text-base font-black uppercase text-slate-900 dark:text-slate-100 mt-0.5">
                     {licenseMatch.fullName}
                   </span>
                 </div>
 
-                {/* 3. APPLICANT ID & CATEGORY */}
+                {/* 3. APPLICANT ID */}
                 <div className={`p-3 rounded-xl border ${
                   theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
                   <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    APPLICANT ID / CATEGORY
+                    APPLICANT ID
                   </span>
                   <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200 mt-0.5">
-                    {licenseMatch.applicantId} {licenseMatch.category ? `(${licenseMatch.category})` : ''}
+                    {licenseMatch.applicantId || '---'}
                   </span>
                 </div>
 
-                {/* 4. CODE NO & DEPARTMENT */}
+                {/* 4. CATEGORY */}
                 <div className={`p-3 rounded-xl border ${
                   theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
                   <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    CODE NO / DEPARTMENT
+                    CATEGORY (वर्ग)
                   </span>
-                  <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-purple-400 mt-0.5">
-                    {licenseMatch.oldCode || licenseMatch.newCode
-                      ? `${licenseMatch.oldCode || '---'} / ${licenseMatch.newCode || '---'}`
-                      : getCodeNo(licenseMatch.applicantId)}{' '}
-                    • {getDepartmentDisplay(licenseMatch.department || licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
+                  <span className="block text-xs sm:text-sm font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    {licenseMatch.category || '---'}
                   </span>
                 </div>
 
@@ -660,7 +657,7 @@ export default function PublicSearch({
                   theme === 'dark' ? 'bg-emerald-950/30 border-emerald-800/60' : 'bg-emerald-50/70 border-emerald-300'
                 }`}>
                   <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                    RECEIVED BY (बुझिलिने व्यक्ति)
+                    RECIPIENT / RECEIVER NAME (बुझिलिने व्यक्ति)
                   </span>
                   <span className="block text-sm sm:text-base font-black text-emerald-800 dark:text-emerald-300 mt-0.5">
                     {licenseMatch.receivedBy || licenseMatch.submittedDocsReceiverName || '---'}
@@ -672,7 +669,7 @@ export default function PublicSearch({
                   theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
                 }`}>
                   <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    DISTRIBUTED BY (बुझाउने व्यक्ति)
+                    DISTRIBUTED BY (बुझाउने कर्मचारी)
                   </span>
                   <span className="block text-xs sm:text-sm font-black uppercase text-indigo-700 dark:text-cyan-400 mt-0.5">
                     {licenseMatch.distributedByStaffName || resolveOperatorName(licenseMatch.updatedBy || '') || licenseMatch.distributedBy || 'Public Handover Desk'}

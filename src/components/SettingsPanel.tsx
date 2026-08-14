@@ -904,14 +904,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
     setConsoleLoading(true);
     setConsoleMsg(null);
     try {
-      const [list, kpis] = await Promise.all([
-        getAllLicenses(),
-        getDashboardKpiCounts(true)
-      ]);
-      setAllLicenses(list);
+      const kpis = await getDashboardKpiCounts(true);
       setServerKpiCounts(kpis);
-      findDuplicates(list);
-      registryDataStore.setRecords(list, 'Firestore Database Registry');
     } catch (err: any) {
       setConsoleMsg({ type: 'err', text: err?.message || "Failed to load database ledger records." });
     } finally {

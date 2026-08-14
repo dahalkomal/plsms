@@ -15,11 +15,12 @@ import {
   getDashboardKpiCounts,
   getPaginatedLicenses,
   isLicenseDistributed,
-  fetchIntegratedReportData
+  fetchIntegratedReportData,
+  isDemoModeActive
 } from '../dbService';
 import { registryDataStore } from '../registryDataStore';
 import { License, LicenseStatus, LicenseLog, CollectionRequest, UploadLedger } from '../types';
-import { Search, Plus, Filter, FileText, Check, AlertCircle, Bookmark, Archive, UserCheck, ShieldAlert, History, ArrowDown, Download, Eye, FileDown, Lock, FileSpreadsheet, Trash2, X, Loader2 } from 'lucide-react';
+import { Search, Plus, Filter, FileText, Check, AlertCircle, Bookmark, Archive, UserCheck, ShieldAlert, History, ArrowDown, Download, Eye, FileDown, Lock, FileSpreadsheet, Trash2, X, Loader2, RefreshCw } from 'lucide-react';
 import LicenseHistory from './LicenseHistory';
 import NepaliDatePicker from './NepaliDatePicker';
 import { convertADToBS } from '../utils/dateConverter';
@@ -114,6 +115,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   const [requestsCount, setRequestsCount] = useState(0);
   const [searchesCount, setSearchesCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -337,6 +339,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       });
       setLicenses(paginatedRes.records);
       setServerTotalCount(paginatedRes.totalCount);
+      setFetchError(null);
       setCurrentPage(1);
       if (paginatedRes.lastDocSnap) {
         setPageDocSnaps([null, paginatedRes.lastDocSnap]);
@@ -355,8 +358,9 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       } catch (e) {
         console.warn("Error refreshing upload ledgers:", e);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn("Error inside lightweight dashboard refresh:", err);
+      setFetchError(err?.message || "Unable to retrieve current database data. Please try again.");
     }
   }, [pageSize, activeRegister, searchQuery]);
 
@@ -372,13 +376,15 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
 
   const fetchData = async () => {
     setLoading(true);
+    setFetchError(null);
     try {
       // 1. Fetch KPI counts directly from Firestore Aggregate Count queries
       try {
         const kpis = await getDashboardKpiCounts();
         setServerKpiCounts(kpis);
-      } catch (kpiErr) {
+      } catch (kpiErr: any) {
         console.warn("Could not load Aggregate KPI counts:", kpiErr);
+        setFetchError(kpiErr?.message || "Failed to load database counts.");
       }
 
       // 2. Fetch initial page of records using Firestore server-side pagination
@@ -393,10 +399,9 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         if (paginatedRes.lastDocSnap) {
           setPageDocSnaps([null, paginatedRes.lastDocSnap]);
         }
-      } catch (pagErr) {
+      } catch (pagErr: any) {
         console.warn("Could not load initial paginated records:", pagErr);
-        const storeRecords = registryDataStore.getRecords();
-        setLicenses([...storeRecords]);
+        setFetchError(pagErr?.message || "Failed to load register records.");
       }
 
       // 2. Fetch Requests count
@@ -431,8 +436,9 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       } catch (roleErr) {
         console.warn("Could not retrieve staff login registry roles:", roleErr);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed fetching database ledger records: ", err);
+      setFetchError(err?.message || "Failed to connect to database.");
     } finally {
       setLoading(false);
     }
@@ -880,7 +886,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         records = Array.isArray(liveRequests) ? liveRequests : [];
       } catch (err) {
         console.warn("Firestore collection requests fetch warning:", err);
-        throw new Error("Unable to retrieve current database data. Please try again.");
+        records = collectionRequests || [];
       }
     } else if (type === 'upload_history') {
       try {
@@ -888,7 +894,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         records = Array.isArray(liveLedgers) ? liveLedgers : [];
       } catch (err) {
         console.warn("Firestore upload history fetch warning:", err);
-        throw new Error("Unable to retrieve current database data. Please try again.");
+        records = uploadLedgers || [];
       }
     } else {
       let licsToFilter: any[] = [];
@@ -897,7 +903,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         licsToFilter = Array.isArray(liveLicenses) ? liveLicenses : [];
       } catch (err) {
         console.warn("Firestore licenses fetch warning:", err);
-        throw new Error("Unable to retrieve current database data. Please try again.");
+        licsToFilter = licenses || [];
       }
 
       if (type === 'distributed') {
@@ -1007,42 +1013,80 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   } = useMemo(() => {
     if (serverKpiCounts) {
       return {
-        ...serverKpiCounts,
+        totalRecords: serverKpiCounts.totalRecords,
+        availableCount: serverKpiCounts.availableCount,
+        notDistributedCount: serverKpiCounts.notDistributedCount,
+        distributedCount: serverKpiCounts.distributedCount,
+        missingCount: serverKpiCounts.missingCount,
+        foundCount: serverKpiCounts.foundCount,
         categoryStatistics: {}
       };
     }
 
-    let dist = 0;
-    let missing = 0;
-    let found = 0;
-    const catStats: Record<string, number> = {};
+    // Only compute fallback from memory in Demo/Mock mode when Firestore is inactive
+    if (isDemoModeActive()) {
+      let dist = 0;
+      let missing = 0;
+      let found = 0;
+      const catStats: Record<string, number> = {};
 
-    for (let i = 0; i < processedLicenses.length; i++) {
-      const l = processedLicenses[i];
-      if (l.status === 'missing') {
-        missing++;
-      } else if (l.status === 'found') {
-        found++;
-      } else if (l.status === 'distributed' || isLicenseDistributed(l)) {
-        dist++;
+      for (let i = 0; i < processedLicenses.length; i++) {
+        const l = processedLicenses[i];
+        if (l.status === 'missing') {
+          missing++;
+        } else if (l.status === 'found') {
+          found++;
+        } else if (l.status === 'distributed' || isLicenseDistributed(l)) {
+          dist++;
+        }
+        const cat = (l.category || 'N/A').toUpperCase().trim();
+        catStats[cat] = (catStats[cat] || 0) + 1;
       }
-      const cat = (l.category || 'N/A').toUpperCase().trim();
-      catStats[cat] = (catStats[cat] || 0) + 1;
+
+      const total = processedLicenses.length;
+      const notDist = Math.max(0, total - (dist + missing + found));
+
+      return {
+        totalRecords: total,
+        availableCount: notDist,
+        notDistributedCount: notDist,
+        distributedCount: dist,
+        missingCount: missing,
+        foundCount: found,
+        categoryStatistics: catStats
+      };
     }
 
-    const total = processedLicenses.length;
-    const notDist = Math.max(0, total - (dist + missing + found));
-
+    // When in live mode and server counts failed or are loading, return nulls so UI does not display misleading zeros
     return {
-      totalRecords: total,
-      availableCount: notDist,
-      notDistributedCount: notDist,
-      distributedCount: dist,
-      missingCount: missing,
-      foundCount: found,
-      categoryStatistics: catStats
+      totalRecords: null as number | null,
+      availableCount: null as number | null,
+      notDistributedCount: null as number | null,
+      distributedCount: null as number | null,
+      missingCount: null as number | null,
+      foundCount: null as number | null,
+      categoryStatistics: {}
     };
   }, [processedLicenses, serverKpiCounts]);
+
+  const isQuotaExhausted = Boolean(
+    fetchError && (
+      fetchError.toLowerCase().includes('quota') ||
+      fetchError.toLowerCase().includes('resource-exhausted') ||
+      fetchError.toLowerCase().includes('resource_exhausted') ||
+      fetchError.toLowerCase().includes('429')
+    )
+  );
+
+  const renderKpiValue = (val: number | null | undefined) => {
+    if (loading && val === null) {
+      return <Loader2 className="w-5 h-5 animate-spin mx-auto text-slate-400" />;
+    }
+    if (val === null || val === undefined) {
+      return <span className="text-xl font-bold text-amber-500" title={fetchError || "Statistics unavailable"}>—</span>;
+    }
+    return val.toLocaleString();
+  };
 
   // Pending statistics connected to centralized Registry Data Store
   const pendingRequestsCount = collectionRequests.length;
@@ -1067,6 +1111,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         if (active) {
           setLicenses(res.records);
           setServerTotalCount(res.totalCount);
+          setFetchError(null);
           if (res.lastDocSnap) {
             setPageDocSnaps(prev => {
               const updated = [...prev];
@@ -1075,8 +1120,11 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             });
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn("Error fetching paginated page:", err);
+        if (active) {
+          setFetchError(err?.message || "Failed to fetch page data.");
+        }
       } finally {
         if (active) {
           setIsSearching(false);
@@ -1399,6 +1447,41 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         )}
       </div>
       
+      {/* Quota Exhausted or Read Error Banner */}
+      {fetchError && (
+        <div className={`p-4 rounded-2xl border flex items-start gap-3 shadow-md ${
+          isQuotaExhausted
+            ? (isDark ? 'bg-amber-950/30 border-amber-800/60 text-amber-200' : 'bg-amber-50 border-amber-300 text-amber-900')
+            : (isDark ? 'bg-red-950/30 border-red-800/60 text-red-200' : 'bg-red-50 border-red-300 text-red-900')
+        }`}>
+          <AlertCircle className={`w-5 h-5 mt-0.5 shrink-0 ${isQuotaExhausted ? 'text-amber-500' : 'text-red-500'}`} />
+          <div className="flex-1 text-xs">
+            <p className="font-black text-sm mb-1">
+              {isQuotaExhausted
+                ? "Firestore Daily Read Quota Temporarily Exhausted"
+                : "Database Read Error"}
+            </p>
+            <p className="opacity-90 leading-relaxed">
+              {isQuotaExhausted
+                ? "Google Cloud Free Tier daily read quota (50,000 reads/day) has been reached for this project. All records are safely preserved in the database and will resume display automatically once quota resets or billing is enabled."
+                : fetchError}
+            </p>
+            <button
+              type="button"
+              onClick={() => fetchData()}
+              className={`mt-2.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 shadow-xs ${
+                isQuotaExhausted
+                  ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                  : 'bg-red-600 hover:bg-red-500 text-white'
+              }`}
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Database Connection</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Dynamic Statistics Block */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <button 
@@ -1414,7 +1497,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             activeRegister === 'available'
               ? (isDark ? 'text-white' : 'text-slate-950')
               : (isDark ? 'text-slate-200' : 'text-slate-800')
-          }`}>{totalRecords}</span>
+          }`}>{renderKpiValue(totalRecords)}</span>
         </button>
         
         <button 
@@ -1430,7 +1513,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             activeRegister === 'not_distributed'
               ? (isDark ? 'text-emerald-300' : 'text-emerald-900')
               : (isDark ? 'text-emerald-400' : 'text-emerald-750')
-          }`}>{notDistributedCount}</span>
+          }`}>{renderKpiValue(notDistributedCount)}</span>
         </button>
 
         <button 
@@ -1446,7 +1529,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             activeRegister === 'distributed'
               ? (isDark ? 'text-blue-300' : 'text-blue-900')
               : (isDark ? 'text-blue-400' : 'text-blue-750')
-          }`}>{distributedCount}</span>
+          }`}>{renderKpiValue(distributedCount)}</span>
         </button>
 
         <button 
@@ -1462,7 +1545,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             activeRegister === 'missing'
               ? (isDark ? 'text-red-300' : 'text-red-900')
               : (isDark ? 'text-red-400' : 'text-red-750')
-          }`}>{missingCount}</span>
+          }`}>{renderKpiValue(missingCount)}</span>
         </button>
 
         <button 
@@ -1478,7 +1561,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             activeRegister === 'found'
               ? (isDark ? 'text-violet-300' : 'text-violet-900')
               : (isDark ? 'text-violet-400' : 'text-violet-750')
-          }`}>{foundCount}</span>
+          }`}>{renderKpiValue(foundCount)}</span>
         </button>
 
         <div className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all ${isDark ? 'bg-cyan-950/25 border-cyan-900/40 text-cyan-300' : 'bg-cyan-100/40 border-cyan-200 text-cyan-900'}`}>
@@ -1629,6 +1712,24 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
           {/* Ledger Table */}
           {loading ? (
             <div className={`text-center py-12 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Loading ledger lists...</div>
+          ) : fetchError ? (
+            <div className={`text-center py-12 px-4 text-xs rounded-2xl border border-dashed space-y-3 ${
+              isDark ? 'bg-red-950/20 border-red-800/50 text-red-400' : 'bg-red-50 border-red-200 text-red-700 font-medium'
+            }`}>
+              <div className="flex flex-col items-center justify-center gap-2">
+                <AlertCircle className="w-7 h-7 text-red-500" />
+                <p className="font-bold text-sm">Unable to load license records</p>
+                <p className="text-xs max-w-md">{fetchError}</p>
+                <button
+                  type="button"
+                  onClick={() => fetchData()}
+                  className="mt-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors inline-flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Retry Database Connection
+                </button>
+              </div>
+            </div>
           ) : filteredLicenses.length === 0 ? (
             <div className={`text-center py-12 px-4 text-xs rounded-2xl border border-dashed space-y-3 ${
               isDark ? 'bg-slate-950/40 border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600 font-medium'

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { License } from '../../types';
 import { getAlphabeticalSummary, getLicensesByAlphabet, AlphabetStat, AlphabeticalSummaryResult } from '../../dbService';
 import { registryDataStore } from '../../registryDataStore';
-import { Search, X, Loader2, Filter, RefreshCw } from 'lucide-react';
+import { Search, X, Loader2, Filter, RefreshCw, AlertCircle } from 'lucide-react';
 import NepaliDatePicker from '../NepaliDatePicker';
 
 interface AlphabeticalDashboardTabProps {
@@ -14,6 +14,7 @@ interface AlphabeticalDashboardTabProps {
 export default function AlphabeticalDashboardTab({ licenses, theme }: AlphabeticalDashboardTabProps) {
   const [summary, setSummary] = useState<AlphabeticalSummaryResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedAlphabet, setSelectedAlphabet] = useState<string | null>(null);
   const [selectedRecords, setSelectedRecords] = useState<License[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -28,11 +29,13 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
 
   const loadSummary = useCallback(async (fDate?: string, tDate?: string) => {
     setLoading(true);
+    setFetchError(null);
     try {
       const res = await getAlphabeticalSummary(fDate, tDate, licenses);
       setSummary(res);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed loading alphabetical summary:", err);
+      setFetchError(err?.message || "Unable to retrieve current database data. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -188,6 +191,32 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
                       <div className="flex items-center justify-center gap-2 text-cyan-500">
                         <Loader2 className="w-5 h-5 animate-spin" />
                         <span>Calculating real-time alphabetical summary...</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : fetchError ? (
+                  <tr>
+                    <td colSpan={4} className="py-10 text-center">
+                      <div className="flex flex-col items-center justify-center gap-3 text-red-500 max-w-md mx-auto px-4">
+                        <AlertCircle className="w-8 h-8 text-amber-500" />
+                        <p className="font-bold text-sm text-slate-800 dark:text-slate-100">
+                          {fetchError.toLowerCase().includes('quota') || fetchError.toLowerCase().includes('resource-exhausted') || fetchError.toLowerCase().includes('429')
+                            ? "Firestore Daily Read Quota Temporarily Exhausted"
+                            : "Failed loading alphabetical summary"}
+                        </p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                          {fetchError.toLowerCase().includes('quota') || fetchError.toLowerCase().includes('resource-exhausted') || fetchError.toLowerCase().includes('429')
+                            ? "Google Cloud Free Tier daily read limit has been reached for this project. Records remain safe in the database and will display automatically once quota resets."
+                            : fetchError}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => loadSummary(isFiltered ? fromDate : undefined, isFiltered ? toDate : undefined)}
+                          className="mt-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md inline-flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Retry Calculation</span>
+                        </button>
                       </div>
                     </td>
                   </tr>
