@@ -165,18 +165,26 @@ export async function startEmailSignIn(email: string, pass: string) {
   const isSuperUser = emailLower === 'dahalkomal@gmail.com' || emailLower.startsWith('superuser') || emailLower.startsWith('superadmin');
 
   try {
-    // Attempt standard sign in via Firebase Auth
-    const result = await signInWithEmailAndPassword(auth, email, pass);
+    // Attempt standard sign in via Firebase Auth with a fast 2.5s timeout safety boundary
+    const authPromise = signInWithEmailAndPassword(auth, email, pass);
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('auth_timeout')), 2500)
+    );
+    const result = await Promise.race([authPromise, timeoutPromise]);
     return result.user;
   } catch (error: any) {
-    const errCode = (error?.code || '').toLowerCase();
-    const errMsg = (error?.message || '').toLowerCase();
+    const errCode = (error?.code || error?.message || '').toLowerCase();
+    const errMsg = (error?.message || error || '').toLowerCase();
 
     // Try auto-creating account in Auth if not registered yet in Firebase Auth
     if (errCode.includes('user-not-found')) {
       try {
         console.log("Registering first-time account in Auth for " + emailLower);
-        const result = await createUserWithEmailAndPassword(auth, email, pass);
+        const createPromise = createUserWithEmailAndPassword(auth, email, pass);
+        const createTimeoutPromise = new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('auth_timeout')), 2500)
+        );
+        const result = await Promise.race([createPromise, createTimeoutPromise]);
         return result.user;
       } catch (signUpError: any) {
         // Fallback to local session below

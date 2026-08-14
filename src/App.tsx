@@ -404,7 +404,23 @@ export default function App() {
         resolveUserRole(user);
         setAuthLoading(false);
       } else {
+        const isDeliberateLogout = sessionStorage.getItem('sandbox_deliberate_logout') === 'true';
+        const cachedUserStr = localStorage.getItem('plsms_live_user');
+        if (!isDeliberateLogout && cachedUserStr) {
+          try {
+            const cachedUser = JSON.parse(cachedUserStr);
+            if (cachedUser && (cachedUser.email || cachedUser.uid)) {
+              setCurrentUser(cachedUser);
+              const cachedRole = (localStorage.getItem('plsms_mock_user_role') || 'staff') as AppRole;
+              setCurrentRole(cachedRole);
+              resolveUserRole(cachedUser);
+              setAuthLoading(false);
+              return;
+            }
+          } catch (e) {}
+        }
         localStorage.removeItem('plsms_live_user');
+        localStorage.removeItem('plsms_mock_user_role');
         setCurrentUser(null);
         setCurrentRole('public');
         setAuthLoading(false);
@@ -579,62 +595,32 @@ export default function App() {
       if (email === 'dahalkomal@gmail.com' || email.startsWith('dahalkomal_auto') || email.startsWith('superuser') || email.startsWith('superadmin')) {
         resolvedPatternRole = 'superuser';
         resolvedPatternDisplayName = email === 'dahalkomal@gmail.com' ? 'Komal Dahal' : 'Super Admin';
-      } else if (email.startsWith('admin')) {
+      } else if (email.startsWith('admin') || email.includes('admin') || email.includes('controller')) {
         resolvedPatternRole = 'admin';
         resolvedPatternDisplayName = 'Admin Officer';
-      } else if (email.startsWith('staff')) {
+      } else if (email.startsWith('staff') || email.includes('staff') || email.includes('operator')) {
         resolvedPatternRole = 'staff';
         resolvedPatternDisplayName = 'Office Staff';
       }
 
-      // Direct lookup from users_roles DB
+      // Direct lookup from users_roles DB with safe 2.5s timeout
       const isSuperUserTarget = email === 'dahalkomal@gmail.com' || resolvedPatternRole === 'superuser';
       const canonicalRoleId = isSuperUserTarget ? 'Super_Admin' : user.uid;
       let roleRef = doc(db, 'users_roles', canonicalRoleId);
-      let roleSnap = await getDoc(roleRef);
       
-      // Email fallback lookup if uid document doesn't exist
-      if (!roleSnap.exists() && user.email && !isSuperUserTarget) {
-        // 1. Try matching against the seeded DEFAULT_CREDENTIALS_MATRIX ID
-        const matchedSeed = DEFAULT_CREDENTIALS_MATRIX.find(r => r.email.toLowerCase() === email);
-        let fallbackSnap = null;
-        let fallbackRef = null;
-
-        if (matchedSeed) {
-          fallbackRef = doc(db, 'users_roles', matchedSeed.id);
-          fallbackSnap = await getDoc(fallbackRef);
-        }
-
-        // 2. Try matching against the sanitized email string ID if first fallback didn't exist
-        if (!fallbackSnap || !fallbackSnap.exists()) {
-          const sanitizedId = email.trim().replace(/[@\.]/g, '_');
-          fallbackRef = doc(db, 'users_roles', sanitizedId);
-          fallbackSnap = await getDoc(fallbackRef);
-        }
-
-        if (fallbackSnap && fallbackSnap.exists()) {
-          // Found legacy / seeded fallback! Copy it to their actual user.uid document
-          const fbData = fallbackSnap.data();
-          await setDoc(roleRef, {
-            ...fbData,
-            updatedAt: new Date().toISOString()
-          });
-          roleSnap = await getDoc(roleRef); // re-fetch to use their uid-based doc
-        }
-      }
+      const roleSnap = await Promise.race([
+        getDoc(roleRef),
+        new Promise<any>((_, reject) => setTimeout(() => reject(new Error('role_read_timeout')), 2500))
+      ]);
       
-      if (roleSnap.exists()) {
+      if (roleSnap && roleSnap.exists && roleSnap.exists()) {
         const roleData = roleSnap.data();
-        let role = roleData.role as AppRole;
+        let role = (roleData.role as AppRole) || resolvedPatternRole || 'staff';
         let displayName = roleData.displayName || '';
         
         if (displayName === 'Super Admin (Lead)' || email === 'dahalkomal@gmail.com') {
           displayName = 'Komal Dahal';
-          try {
-            await setDoc(roleRef, { displayName: 'Komal Dahal' }, { merge: true });
-          } catch (e) {
-            console.warn("Failed to auto-update display name in Firestore", e);
-          }
+          setDoc(roleRef, { displayName: 'Komal Dahal' }, { merge: true }).catch(() => {});
         }
         
         setAuthStaffName(displayName || user.displayName || user.email?.split('@')[0] || 'Authorized Operator');
@@ -651,31 +637,20 @@ export default function App() {
             temporaryPassword: isGoogleUser ? '' : defaultTempPass,
             mustChangePassword: isGoogleUser ? false : true
           };
-          await setDoc(roleRef, healedRecord);
+          setDoc(roleRef, healedRecord).catch(() => {});
           role = resolvedPatternRole;
-          roleData.role = resolvedPatternRole;
-          roleData.mustChangePassword = isGoogleUser ? false : true;
-          roleData.temporaryPassword = isGoogleUser ? '' : defaultTempPass;
         }
 
         // Silent cleanup for lingering password-change triggers on Google Auth/Gmail users
         if (isGoogleUser && (roleData.mustChangePassword === true || roleData.temporaryPassword)) {
-          console.log(`Clearing password change constraints for Google User: ${email}`);
-          roleData.mustChangePassword = false;
-          roleData.temporaryPassword = '';
-          await setDoc(roleRef, {
+          setDoc(roleRef, {
             mustChangePassword: false,
             temporaryPassword: ''
-          }, { merge: true });
+          }, { merge: true }).catch(() => {});
         }
 
         setCurrentRole(role);
         if (role === 'superuser') isAdminRole = true;
-
-        if (role !== 'public' && (role === 'superuser' || role === 'admin')) {
-          // Instantly seed all demo data into real Cloud Firestore if empty (non-blocking)
-          seedAllDemoDataToFirestore().catch(e => console.warn("Seed error:", e));
-        }
 
         // Force check if they have a temporary password set and must change it on first login
         if (!isGoogleUser && (roleData.mustChangePassword === true || roleData.temporaryPassword)) {
@@ -683,16 +658,17 @@ export default function App() {
           setShowMustChangeModal(true);
         }
       } else {
-        // Try searching all roles in memory / localStorage / fallback matrix first
-        const allRoles = await getAllUserRoles();
-        const matchedUser = allRoles.find(r => r.email?.toLowerCase() === email);
+        // Fallback from cache or default pattern
+        const allRoles = await Promise.race([
+          getAllUserRoles(),
+          new Promise<UserRole[]>((resolve) => resolve(DEFAULT_CREDENTIALS_MATRIX))
+        ]);
+        const matchedUser = allRoles.find(r => r.email?.toLowerCase() === email || r.id === user.uid || (r.username && r.username.toLowerCase() === email));
 
-        let resolvedRole: AppRole = matchedUser ? matchedUser.role : (resolvedPatternRole || (email === 'dahalkomal@gmail.com' ? 'superuser' : 'staff'));
-        let resolvedDisplayName = matchedUser?.displayName || resolvedPatternDisplayName || user.displayName || user.email?.split('@')[0] || 'Authorized Operator';
+        const resolvedRole: AppRole = matchedUser ? matchedUser.role : (resolvedPatternRole || (email === 'dahalkomal@gmail.com' ? 'superuser' : 'staff'));
+        const resolvedDisplayName = matchedUser?.displayName || resolvedPatternDisplayName || user.displayName || user.email?.split('@')[0] || 'Authorized Operator';
 
-        // CRITICAL FIX: Make sure roleRef points to user.uid when writing autoprovisioned records
         roleRef = doc(db, 'users_roles', user.uid);
-
         const defaultTempPassFresh = (resolvedRole === 'superuser' || resolvedRole === 'admin') ? 'Itahari@PLSMS2083' : 'Itahari@2026';
         const freshRecord = {
           email: email,
@@ -702,16 +678,7 @@ export default function App() {
           temporaryPassword: isGoogleUser ? '' : defaultTempPassFresh,
           mustChangePassword: isGoogleUser ? false : true
         };
-        try {
-          await setDoc(roleRef, freshRecord);
-        } catch (dbErr) {
-          console.warn("Firestore role write skipped:", dbErr);
-        }
-
-        if (resolvedRole === 'superuser' || resolvedRole === 'admin') {
-          // Instantly seed all demo data into real Cloud Firestore if empty (non-blocking)
-          seedAllDemoDataToFirestore().catch(e => console.warn("Seed error:", e));
-        }
+        setDoc(roleRef, freshRecord).catch(() => {});
 
         if (!isGoogleUser && (matchedUser?.mustChangePassword || matchedUser?.temporaryPassword)) {
           setMustChangeUserRecord({ id: user.uid, ...freshRecord } as UserRole);
@@ -721,33 +688,11 @@ export default function App() {
         setAuthStaffName(resolvedDisplayName);
         setCurrentRole(resolvedRole);
       }
-
-      // If resolved as superuser or admin, dynamically check & seed/bootstrap the general office settings
-      const emailLower = (user.email || '').toLowerCase();
-      if (isAdminRole || emailLower === 'dahalkomal@gmail.com' || emailLower.startsWith('admin')) {
-        const settingsRef = doc(db, 'office_settings', 'settings');
-        const settingsSnap = await getDoc(settingsRef);
-        if (!settingsSnap.exists()) {
-          const initialSettings: OfficeSettings = {
-            officeName: "Transport Management Office, Driving License",
-            officeAddress: "Itahari, Sunsari, Nepal",
-            contactNumber: "+977-25-580121",
-            emailAddress: "tmoitahari@gmail.com",
-            websiteFooter: "© 2026 Transport Management Office, Driving License, Itahari, Sunsari. Authorized Use Only. All operations are logged and monitored for security compliance.",
-            homepageBanner: "Welcome to Transport Management Office Driving License Records Center",
-            searchMenuLabel: "Search",
-            requestMenuLabel: "Schedule Pickup",
-            contactMenuLabel: "Contact Desk",
-            noticesMenuLabel: "NOTICES"
-          };
-          await setDoc(settingsRef, initialSettings);
-        }
-      }
     } catch (err) {
       if (isQuotaOrMemoryError(err)) {
         console.warn("Quota limit exceeded while checking role mapping table. Falling back gracefully.");
       } else {
-        console.error("Error checking role mapping table: ", err);
+        console.warn("Role mapping table check fallback notice: ", err);
       }
       checkAndTriggerQuotaError(err);
       
@@ -755,14 +700,16 @@ export default function App() {
       if (email === 'dahalkomal@gmail.com' || email.startsWith('dahalkomal_auto') || email.startsWith('superuser') || email.startsWith('superadmin')) {
         setCurrentRole('superuser');
         setAuthStaffName(email === 'dahalkomal@gmail.com' ? 'Komal Dahal' : 'Super Admin');
-      } else if (email.startsWith('admin')) {
+      } else if (email.startsWith('admin') || email.includes('admin') || email.includes('controller')) {
         setCurrentRole('admin');
         setAuthStaffName('Admin Officer');
-      } else if (email.startsWith('staff')) {
+      } else if (email.startsWith('staff') || email.includes('staff') || email.includes('operator')) {
         setCurrentRole('staff');
         setAuthStaffName('Office Staff');
       } else {
-        setCurrentRole('public');
+        const fallbackRole = (localStorage.getItem('plsms_mock_user_role') as AppRole) || 'staff';
+        setCurrentRole(fallbackRole);
+        setAuthStaffName(user.displayName || user.email?.split('@')[0] || 'Authorized Operator');
       }
     } finally {
       setAuthLoading(false);
@@ -945,8 +892,8 @@ export default function App() {
 
   const handleEmailSignInSubmit = async (e?: React.FormEvent, explicitEmail?: string, explicitPass?: string) => {
     if (e) e.preventDefault();
-    const emailToUse = explicitEmail || loginEmail;
-    const passToUse = explicitPass || loginPassword;
+    const emailToUse = (explicitEmail || loginEmail || '').trim();
+    const passToUse = explicitPass || loginPassword || '';
 
     if (!emailToUse || !passToUse) {
       setSignInError("Please enter both username/email and password.");
@@ -955,10 +902,14 @@ export default function App() {
     setSignInLoading(true);
     setSignInError(null);
     try {
-      // 🔍 Fetch latest user roles directly from DB / cache with forceRefresh to include all newly created staff
+      // 🔍 Fetch latest user roles directly from DB / cache with safe timeout
       let allRoles: UserRole[] = [];
       try {
-        allRoles = await getAllUserRoles(true);
+        const rolesPromise = getAllUserRoles(true);
+        const timeoutPromise = new Promise<UserRole[]>((resolve) => 
+          setTimeout(() => resolve(registeredUsers && registeredUsers.length > 0 ? registeredUsers : DEFAULT_CREDENTIALS_MATRIX), 2500)
+        );
+        allRoles = await Promise.race([rolesPromise, timeoutPromise]);
         if (allRoles && allRoles.length > 0) {
           setRegisteredUsers(allRoles);
         }
@@ -969,7 +920,7 @@ export default function App() {
 
       // Support Username/Name login lookup using fresh allRoles
       let matchedDBUser: UserRole | undefined = findMatchingUserWithInput(emailToUse, allRoles) || undefined;
-      let resolvedEmail = matchedDBUser?.email?.toLowerCase() || emailToUse.trim().toLowerCase();
+      let resolvedEmail = matchedDBUser?.email?.toLowerCase() || emailToUse.toLowerCase();
 
       if (!matchedDBUser && resolvedEmail.includes('@')) {
         const emailMatches = allRoles.filter(r => r.email && r.email.toLowerCase() === resolvedEmail);
@@ -979,8 +930,8 @@ export default function App() {
       }
 
       const isSuperUserCheck = resolvedEmail === 'dahalkomal@gmail.com' || 
-                               emailToUse.trim().toLowerCase() === 'dahalkomal@gmail.com' ||
-                               emailToUse.trim().toLowerCase() === 'super_admin';
+                               emailToUse.toLowerCase() === 'dahalkomal@gmail.com' ||
+                               emailToUse.toLowerCase() === 'super_admin';
 
       // Auto-provision Super Admin if not found in database roles
       if (!matchedDBUser && isSuperUserCheck) {
@@ -1009,7 +960,16 @@ export default function App() {
       }
 
       // STRICT MANDATORY PASSWORD VALIDATION GATE
-      const isPasswordValid = await verifyUserPassword(matchedDBUser, passToUse);
+      let isPasswordValid = false;
+      try {
+        const verifyPromise = verifyUserPassword(matchedDBUser, passToUse);
+        const verifyTimeout = new Promise<boolean>((resolve) => 
+          setTimeout(() => resolve(false), 3000)
+        );
+        isPasswordValid = await Promise.race([verifyPromise, verifyTimeout]);
+      } catch (e) {
+        console.warn("Password verification check error:", e);
+      }
 
       if (!isPasswordValid) {
         setSignInError("सङ्केत-शब्द मिलेन (Incorrect Password): परिवर्तन गरिएको वा अद्यावधिक गरिएको नयाँ पासवर्ड (Updated Password) प्रयोग गर्नुहोस्।");
@@ -1019,49 +979,61 @@ export default function App() {
       }
 
       // Record active password session metadata for real-time synchronization
-      const passHashToRecord = matchedDBUser.passwordHash || (await hashCredential(passToUse));
-      const verToRecord = matchedDBUser.passwordVersion || 1;
-      sessionStorage.setItem('plsms_session_pwd_version', String(verToRecord));
-      sessionStorage.setItem('plsms_session_pwd_hash', passHashToRecord);
-      sessionStorage.setItem('plsms_session_user_id', matchedDBUser.id);
-
-      // 🔓 2. Setup the signed-in session via Firebase Auth
       try {
-        sessionStorage.removeItem('sandbox_deliberate_logout');
-        const user = await startEmailSignIn(resolvedEmail, passToUse);
-        setCurrentUser(user);
-        try {
-          localStorage.setItem('plsms_live_user', JSON.stringify(user));
-        } catch (e) {}
-        await resolveUserRole(user);
-        if (activeTab === 'search') {
-          setActiveTab('dashboard');
-        }
-        setLoginPassword('');
-        setIsSignInModalOpen(false);
+        const passHashToRecord = matchedDBUser.passwordHash || (await hashCredential(passToUse));
+        const verToRecord = matchedDBUser.passwordVersion || 1;
+        sessionStorage.setItem('plsms_session_pwd_version', String(verToRecord));
+        sessionStorage.setItem('plsms_session_pwd_hash', passHashToRecord);
+        sessionStorage.setItem('plsms_session_user_id', matchedDBUser.id);
+      } catch (e) {}
+
+      // 🔓 2. Setup the signed-in session via Firebase Auth with safe fallback
+      sessionStorage.removeItem('sandbox_deliberate_logout');
+      let user: any = null;
+      try {
+        user = await startEmailSignIn(resolvedEmail, passToUse);
       } catch (innerErr: any) {
-        console.warn("Firebase Auth sign-in secondary sync note:", innerErr);
-        sessionStorage.removeItem('sandbox_deliberate_logout');
+        console.warn("Firebase Auth sign-in note:", innerErr);
+      }
+
+      if (!user || !user.uid) {
         const fallbackUid = matchedDBUser ? matchedDBUser.id : (isSuperUserCheck ? 'Super_Admin' : `user_${resolvedEmail.replace(/[^a-z0-9]/g, '_')}`);
-        const syntheticUser: any = {
+        user = {
           uid: fallbackUid,
           email: resolvedEmail,
           displayName: matchedDBUser.displayName || resolvedEmail.split('@')[0],
           emailVerified: true
         };
-        setCurrentUser(syntheticUser);
-        try {
-          localStorage.setItem('plsms_live_user', JSON.stringify(syntheticUser));
-        } catch (e) {}
-        await resolveUserRole(syntheticUser);
-        if (activeTab === 'search') {
-          setActiveTab('dashboard');
-        }
-        setLoginPassword('');
-        setIsSignInModalOpen(false);
       }
+
+      const assignedRole = matchedDBUser.role || (isSuperUserCheck ? 'superuser' : 'staff');
+      const assignedName = matchedDBUser.displayName || resolvedEmail.split('@')[0] || 'Authorized Operator';
+
+      setCurrentUser(user);
+      try {
+        localStorage.setItem('plsms_live_user', JSON.stringify(user));
+        localStorage.setItem('plsms_mock_user_role', assignedRole);
+      } catch (e) {}
+
+      setCurrentRole(assignedRole);
+      setAuthStaffName(assignedName);
+
+      try {
+        await Promise.race([
+          resolveUserRole(user),
+          new Promise((resolve) => setTimeout(resolve, 2000))
+        ]);
+      } catch (roleErr) {
+        console.warn("Background role resolution note:", roleErr);
+      }
+
+      if (activeTab === 'search') {
+        setActiveTab('dashboard');
+      }
+      setLoginPassword('');
+      setIsSignInModalOpen(false);
     } catch (err: any) {
-      console.error(err);
+      console.error("Sign-in process error:", err);
       setSignInError(err?.message || "Authentication error. Access Denied.");
     } finally {
       setSignInLoading(false);

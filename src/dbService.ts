@@ -562,17 +562,21 @@ export const SYSTEM_STAFF_DEFAULT_PASSWORD = "Itahari@2026";
 export async function verifyUserPassword(userRecord: UserRole, enteredPassword: string): Promise<boolean> {
   if (!userRecord || !enteredPassword) return false;
 
-  // Real-time Firestore document fetch to ensure multi-browser credential synchronization
+  // Real-time Firestore document fetch with safe 2.5s timeout to ensure multi-browser credential synchronization without hanging
   let liveUser: UserRole = userRecord;
   try {
     if (userRecord.id) {
-      const snap = await getDoc(doc(db, 'users_roles', userRecord.id));
-      if (snap.exists()) {
+      const getDocPromise = getDoc(doc(db, 'users_roles', userRecord.id));
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('timeout')), 2500)
+      );
+      const snap = await Promise.race([getDocPromise, timeoutPromise]);
+      if (snap && snap.exists && snap.exists()) {
         liveUser = { id: snap.id, ...snap.data() } as UserRole;
       }
     }
   } catch (err) {
-    console.warn("Notice: Real-time Firestore password verification check:", err);
+    console.warn("Notice: Real-time Firestore password verification check (falling back to user record):", err);
   }
 
   const enteredHash = await hashCredential(enteredPassword);
@@ -600,16 +604,14 @@ export async function verifyUserPassword(userRecord: UserRole, enteredPassword: 
   const expectedDefaultHash = await hashCredential(expectedDefaultPassword);
 
   if (enteredPassword === expectedDefaultPassword || enteredHash === expectedDefaultHash) {
-    // Automatically save passwordHash in Firestore so future logins strictly require this hash or updated password
-    try {
-      await setDoc(doc(db, 'users_roles', liveUser.id), {
-        passwordHash: enteredHash,
-        passwordVersion: 1,
-        passwordLastChanged: new Date().toISOString(),
-        isCustomPassword: false,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-    } catch (e) {}
+    // Automatically save passwordHash in Firestore non-blockingly so future logins strictly require this hash or updated password
+    setDoc(doc(db, 'users_roles', liveUser.id), {
+      passwordHash: enteredHash,
+      passwordVersion: 1,
+      passwordLastChanged: new Date().toISOString(),
+      isCustomPassword: false,
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch(() => {});
     return true;
   }
 
