@@ -124,3 +124,16 @@ export function isLicenseMatch(
 
   return false;
 }
+
+/**
+ * Robust check if a license record is marked as distributed
+ */
+export function isLicenseDistributed(lic: any): boolean {
+  if (!lic) return false;
+  if (lic.status === 'distributed') return true;
+  if (lic.distributed === true || String(lic.distributed).toLowerCase() === 'true') return true;
+  if (String(lic.distributionStatus || '').toLowerCase() === 'distributed') return true;
+  if (Boolean(lic.receivedBy && String(lic.receivedBy).trim() !== '')) return true;
+  if (Boolean(lic.distributedDate && String(lic.distributedDate).trim() !== '')) return true;
+  return false;
+}

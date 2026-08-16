@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { HistoryAutocompleteField } from './HistoryAutocompleteField';
 import { HistorySuggestionService } from '../utils/HistorySuggestionService';
 import { isLicenseMatch, nepaliToEnglishDigits } from '../utils/licenseNormalizer';
+import { classifySearchInput } from '../utils/searchClassifier';
+import { searchLicenseBySmartIdentifier } from '../utils/searchEngineService';
 import { auth } from '../firebase';
 import { getLicenseById, getLicenseByLicenseNumber, incrementSearchesServed, createCollectionRequest, createOrUpdateLicense, getAllUserRoles, resolveStaffName, isLicenseDistributed } from '../dbService';
 import { License, CollectionRequest, AppRole } from '../types';
@@ -10,19 +12,23 @@ import { Search, Calendar, Phone, Clipboard, CheckCircle, Clock, AlertCircle, He
 import { registryDataStore } from '../registryDataStore';
 import { convertADToBS } from '../utils/dateConverter';
 
-function getDepartmentDisplay(val: string | undefined): string {
-  if (!val || !val.trim()) return '---';
-  const clean = val.trim();
-  const lower = clean.toLowerCase();
+export function extractDepartmentValue(lic: any): string {
+  if (!lic) return '';
+  if (typeof lic === 'string') return lic.trim();
+  if (typeof lic !== 'object') return String(lic).trim();
 
-  if (lower === 'sunday' || lower === 'sun') return 'आईतबार';
-  if (lower === 'monday' || lower === 'mon') return 'सोमबार';
-  if (lower === 'tuesday' || lower === 'tue') return 'मंगलबार';
-  if (lower === 'wednesday' || lower === 'wed') return 'बुधबार';
-  if (lower === 'thursday' || lower === 'thu') return 'बिहीबार';
-  if (lower === 'friday' || lower === 'fri') return 'शुक्रबार';
-  if (lower === 'saturday' || lower === 'sat') return 'शनिबार';
+  const candidate = (
+    lic.department ||
+    lic.Department ||
+    lic.DEPARTMENT ||
+    ''
+  );
+  return String(candidate || '').trim();
+}
 
+function getDepartmentDisplay(valOrLic: any): string {
+  const clean = extractDepartmentValue(valOrLic);
+  if (!clean) return '---';
   return clean;
 }
 
@@ -350,16 +356,17 @@ export default function PublicSearch({
       return;
     }
 
-    const normQuery = nepaliToEnglishDigits(rawQuery);
-    if (normQuery.length < 3) {
-      setSearchError("कृपया कम्तीमा ३ अङ्क/अक्षर प्रविष्ट गर्नुहोस् (Please enter at least 3 characters)");
+    // 1. Local Input Classification before any Firestore query -> 0 reads for invalid input
+    const classification = classifySearchInput(rawQuery);
+    if (classification.type === 'INVALID') {
+      setSearchError(classification.errorMessageNp || classification.errorMessage || "कृपया सही ढाँचा प्रविष्ट गर्नुहोस्");
       setSearched(false);
       setLicenseMatch(null);
       return;
     }
 
     setSearchError('');
-    setLastSearchedQuery(rawQuery);
+    setLastSearchedQuery(classification.displayNormalized || rawQuery);
     setSearching(true);
     setSearched(false);
     setLicenseMatch(null);
@@ -372,8 +379,17 @@ export default function PublicSearch({
     setCollectorName('');
 
     try {
-      // Query Firestore directly using indexed licenseNumber field
-      let processedMatch = await getLicenseByLicenseNumber(normQuery);
+      // Query Firestore directly using indexed equality query via centralized engine
+      const searchRes = await searchLicenseBySmartIdentifier(rawQuery);
+
+      if (!searchRes.success && searchRes.error) {
+        setSearchError(searchRes.error);
+        setSearched(true);
+        setLicenseMatch(null);
+        return;
+      }
+
+      let processedMatch: License | null = searchRes.records.length > 0 ? searchRes.records[0] : null;
 
       if (processedMatch) {
         if (isLicenseDistributed(processedMatch) && processedMatch.status !== 'missing' && processedMatch.status !== 'found') {
@@ -885,7 +901,7 @@ export default function PublicSearch({
                         ? 'text-purple-400 font-black text-sm xs:text-base sm:text-lg' 
                         : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
                     }`}>
-                      {getDepartmentDisplay(licenseMatch.department || licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
+                      {getDepartmentDisplay(licenseMatch)}
                     </span>
                   </div>
                 </div>
@@ -1072,9 +1088,19 @@ export default function PublicSearch({
                   }`}>
                     <p className="text-[11px] xs:text-xs sm:text-base font-extrabold leading-relaxed text-center py-0.5 sm:py-1 font-sans">
                       तपाईको स्मार्ट कार्ड कार्यालयमा उपलब्ध छ । उक्त कार्ड लिनको लागि{' '}
-                      <strong className="text-red-600 dark:text-red-400 font-black text-xs xs:text-sm sm:text-xl px-1 underline decoration-2 decoration-red-300 inline-block">
-                        {getDepartmentDisplay(licenseMatch.department || licenseMatch.contactDepartment || licenseMatch.officeVisitDay)}
-                      </strong>{' '}
+                      {(() => {
+                        const deptVal = getDepartmentDisplay(licenseMatch);
+                        if (deptVal && deptVal !== '---') {
+                          return (
+                            <>
+                              <strong className="text-red-600 dark:text-red-400 font-black text-xs xs:text-sm sm:text-xl px-1 underline decoration-2 decoration-red-300 inline-block">
+                                {deptVal}
+                              </strong>{' '}
+                            </>
+                          );
+                        }
+                        return null;
+                      })()}
                       आउनुहुन जानकारी गराईन्छ ।
                     </p>
                   </div>

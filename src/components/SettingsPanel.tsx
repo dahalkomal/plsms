@@ -1019,10 +1019,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             mapping['oldCode'] = col;
           } else if (norm.includes('newcode') || norm.includes('new')) {
             mapping['newCode'] = col;
-          } else if (norm.includes('contactdepartment') || norm.includes('contactdeparfment') || norm.includes('contactdept') || norm.includes('department') || norm.includes('dept') || norm.includes('visit') || norm.includes('day') || norm.includes('scheduled') || norm.includes('visitdate') || norm.includes('visit_date')) {
+          } else if (norm.includes('department') || norm.includes('departmen') || norm.includes('dept')) {
             mapping['department'] = col;
-            mapping['contactDepartment'] = col;
-            mapping['officeVisitDay'] = col;
           } else if (norm.includes('received') || norm.includes('receiver') || norm.includes('receivedby')) {
             mapping['receivedBy'] = col;
           }
@@ -1069,11 +1067,14 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             const newCode = String(row[mapping['newCode']] || '').trim();
             const rawDept = String(
               row[mapping['department']] || 
-              row[mapping['contactDepartment']] || 
-              row[mapping['officeVisitDay']] || 
+              row['DEPARTMENT'] ||
+              row['Department'] ||
+              row['department'] ||
+              row['DEPT'] ||
+              row['Dept'] ||
+              row['dept'] ||
               ''
             ).trim();
-            const visitDay = rawDept || 'Monday - Friday (9 AM - 4 PM)';
             const receivedBy = String(row[mapping['receivedBy']] || '').trim();
 
             const sn = row[mapping['sn']] ? Number(row[mapping['sn']]) : (j + 1);
@@ -1090,7 +1091,6 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               oldCode,
               newCode,
               rawDept,
-              visitDay,
               receivedBy,
               sn
             });
@@ -1147,7 +1147,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           for (let i = 0; i < validRows.length; i += demoChunkSize) {
             const chunk = validRows.slice(i, i + demoChunkSize);
             for (const item of chunk) {
-              const { rawAppId, rawName, rawFhName, rawLicenseNo, category, oldCode, newCode, rawDept, visitDay, receivedBy, sn } = item;
+              const { rawAppId, rawName, rawFhName, rawLicenseNo, category, oldCode, newCode, rawDept, receivedBy, sn } = item;
               const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
 
               const upperNo = rawLicenseNo.toUpperCase();
@@ -1173,8 +1173,6 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                 licenseNumber: rawLicenseNo,
                 category: category,
                 department: rawDept || undefined,
-                contactDepartment: rawDept || visitDay,
-                officeVisitDay: visitDay,
                 receivedBy: receivedBy,
                 oldCode: oldCode,
                 newCode: newCode,
@@ -1219,7 +1217,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
 
           // 1. Prepare all record objects in memory & check in-file duplicates
           for (const item of validRows) {
-            const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, rawDept, visitDay, receivedBy, sn } = item;
+            const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, rawDept, receivedBy, sn } = item;
             const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
             const upperNo = rawLicenseNo.toUpperCase();
 
@@ -1247,8 +1245,6 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               licenseNumber: rawLicenseNo,
               category: category,
               department: rawDept || undefined,
-              contactDepartment: rawDept || visitDay,
-              officeVisitDay: visitDay,
               receivedBy: receivedBy,
               oldCode: oldCode,
               newCode: newCode,
@@ -2520,7 +2516,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           "Category",
           "Old Code",
           "New Code",
-          "Visiting Date",
+          "Department",
           "Received By",
           "Status"
         ],
@@ -2532,7 +2528,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           lic.category || "LTV",
           lic.oldCode || "",
           lic.newCode || "",
-          lic.officeVisitDay || "Monday - Friday",
+          lic.department || "",
           lic.receivedBy || "",
           lic.status || "available"
         ])

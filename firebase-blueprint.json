@@ -84,9 +84,9 @@
           "type": "string",
           "description": "License vehicle categorization."
         },
-        "officeVisitDay": {
+        "department": {
           "type": "string",
-          "description": "Allocated day of week or calendar date for citizens to collect."
+          "description": "Allocated department name or distribution section."
         },
         "receivedBy": {
           "type": "string",

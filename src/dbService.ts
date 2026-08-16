@@ -3,6 +3,8 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { isLicenseMatch, nepaliToEnglishDigits, cleanAlphanumeric, extractDigits } from './utils/licenseNormalizer';
 import { convertADToBS } from './utils/dateConverter';
 import { registryDataStore } from './registryDataStore';
+import { classifySearchInput } from './utils/searchClassifier';
+import { searchLicenseBySmartIdentifier } from './utils/searchEngineService';
 import { 
   doc, 
   getDoc, 
@@ -730,7 +732,7 @@ export async function getBestAvailableLicenses(): Promise<License[]> {
   return resultList;
 }
 
-export async function getAllLicenses(): Promise<License[]> {
+export async function getAllLicenses(maxLimit: number = 5000): Promise<License[]> {
   if (isDemoModeActive()) {
     return getBestAvailableLicenses();
   }
@@ -740,12 +742,13 @@ export async function getAllLicenses(): Promise<License[]> {
     let hasMore = true;
     const list: License[] = [];
 
-    while (hasMore) {
+    while (hasMore && list.length < maxLimit) {
+      const fetchBatchSize = Math.min(1000, maxLimit - list.length);
       const q = lastSnap
-        ? query(colRef, limit(1000), startAfter(lastSnap))
-        : query(colRef, limit(1000));
+        ? query(colRef, limit(fetchBatchSize), startAfter(lastSnap))
+        : query(colRef, limit(fetchBatchSize));
 
-      const snap = await getDocs(q);
+      const snap = await withFirestoreRetry(() => getDocs(q));
       if (snap.empty) {
         hasMore = false;
         break;
@@ -757,7 +760,7 @@ export async function getAllLicenses(): Promise<License[]> {
       }
 
       lastSnap = docs[docs.length - 1];
-      if (docs.length < 1000) {
+      if (docs.length < fetchBatchSize) {
         hasMore = false;
       }
     }
@@ -879,6 +882,37 @@ export async function getDashboardKpiCounts(forceRefresh: boolean = false): Prom
   dashboardKpiPromise = (async () => {
     if (!isDemoModeActive()) {
       try {
+        // Step 1: Check persistent Firestore summary document /dashboard_stats/general (costs only 1 read)
+        if (!forceRefresh) {
+          try {
+            const statsDoc = await withFirestoreRetry(() => getDoc(doc(db, 'dashboard_stats', 'general')));
+            if (statsDoc.exists()) {
+              const data = statsDoc.data() as any;
+              if (data && typeof data.totalRecords === 'number') {
+                const total = data.totalRecords;
+                const distributed = data.distributedCount ?? 0;
+                const missing = data.missingCount ?? 0;
+                const found = data.foundCount ?? 0;
+                const notDist = data.notDistributedCount ?? Math.max(0, total - (distributed + missing + found));
+
+                const res: DashboardKpiCounts = {
+                  totalRecords: total,
+                  availableCount: notDist,
+                  notDistributedCount: notDist,
+                  distributedCount: distributed,
+                  missingCount: missing,
+                  foundCount: found
+                };
+                cachedDashboardKpiCounts = res;
+                return res;
+              }
+            }
+          } catch (docErr) {
+            console.warn("Persistent KPI summary check notice:", docErr);
+          }
+        }
+
+        // Step 2: Fall back to authoritative getCountFromServer aggregate queries
         const col = collection(db, 'licenses');
         const [totalSnap, distSnap, missingSnap, foundSnap] = await withFirestoreRetry(() => Promise.all([
           getCountFromServer(col),
@@ -898,7 +932,7 @@ export async function getDashboardKpiCounts(forceRefresh: boolean = false): Prom
         // sum(notDistributed + distributed + missing + found) === totalRecords
         const notDistributed = Math.max(0, total - (distributedCount + missingCount + foundCount));
 
-        const res = {
+        const res: DashboardKpiCounts = {
           totalRecords: total,
           availableCount: notDistributed,
           notDistributedCount: notDistributed,
@@ -906,12 +940,29 @@ export async function getDashboardKpiCounts(forceRefresh: boolean = false): Prom
           missingCount,
           foundCount
         };
+
+        // Persist to /dashboard_stats/general so subsequent dashboard reads cost only 1 document read
+        try {
+          await setDoc(doc(db, 'dashboard_stats', 'general'), {
+            ...res,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (persistErr) {
+          console.warn("Could not save persistent KPI summary:", persistErr);
+        }
+
         cachedDashboardKpiCounts = res;
         return res;
       } catch (err: any) {
-        console.error("Failed to fetch aggregate counts from server:", err);
         checkAndTriggerQuotaError(err);
-        throw new Error(`Unable to fetch dashboard statistics: ${err?.message || 'Database connection error'}`);
+        if (isQuotaOrMemoryError(err)) {
+          console.warn("Firestore quota limit notice during KPI counts calculation; falling back gracefully to cached/store data.");
+        } else {
+          console.warn("Notice: Aggregate counts fetch failed, falling back gracefully:", err?.message || err);
+        }
+        if (cachedDashboardKpiCounts) {
+          return cachedDashboardKpiCounts;
+        }
       }
     }
 
@@ -991,7 +1042,10 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
           qConstraints.push(where('status', '==', 'available'));
         }
 
-        // Safe pagination constraints without composite index dependency
+        // Primary Firestore server-side ordering: Full Name ascending (A -> Z)
+        qConstraints.push(orderBy('fullName', 'asc'));
+
+        // Safe cursor pagination constraints based on Full Name ascending order
         if (lastDocSnap) {
           qConstraints.push(startAfter(lastDocSnap));
         }
@@ -1000,8 +1054,31 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
           qConstraints.push(limit(pageSize));
         }
 
-        const q = query(colRef, ...qConstraints);
-        const snap = await withFirestoreRetry(() => getDocs(q));
+        let snap;
+        try {
+          const q = query(colRef, ...qConstraints);
+          snap = await withFirestoreRetry(() => getDocs(q));
+        } catch (queryErr: any) {
+          const errMsg = String(queryErr?.message || '');
+          if (errMsg.includes('index') || errMsg.includes('FAILED_PRECONDITION') || queryErr?.code === 'failed-precondition') {
+            console.warn("Firestore index notice for status + fullName ascending sort:", errMsg);
+            // Resilient fallback for status filtered query if composite index is being built
+            try {
+              const noSortConstraints: QueryConstraint[] = [];
+              if (statusFilter === 'distributed') noSortConstraints.push(where('status', '==', 'distributed'));
+              else if (statusFilter === 'missing') noSortConstraints.push(where('status', '==', 'missing'));
+              else if (statusFilter === 'found') noSortConstraints.push(where('status', '==', 'found'));
+              else if (statusFilter === 'not_distributed') noSortConstraints.push(where('status', '==', 'available'));
+              if (lastDocSnap) noSortConstraints.push(startAfter(lastDocSnap));
+              if (pageSize > 0) noSortConstraints.push(limit(pageSize));
+              snap = await withFirestoreRetry(() => getDocs(query(colRef, ...noSortConstraints)));
+            } catch (fallbackErr) {
+              throw queryErr;
+            }
+          } else {
+            throw queryErr;
+          }
+        }
         clearQuotaExceededFlag();
 
         const rawRecords = snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
@@ -1035,19 +1112,34 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
           return true;
         });
 
-        const countQueryConstraints: QueryConstraint[] = [];
-        if (statusFilter === 'distributed') {
-          countQueryConstraints.push(where('status', '==', 'distributed'));
-        } else if (statusFilter === 'missing') {
-          countQueryConstraints.push(where('status', '==', 'missing'));
-        } else if (statusFilter === 'found') {
-          countQueryConstraints.push(where('status', '==', 'found'));
-        } else if (statusFilter === 'not_distributed') {
-          countQueryConstraints.push(where('status', '==', 'available'));
-        }
+        let totalCount = 0;
+        if (cachedDashboardKpiCounts) {
+          if (statusFilter === 'distributed') {
+            totalCount = cachedDashboardKpiCounts.distributedCount;
+          } else if (statusFilter === 'missing') {
+            totalCount = cachedDashboardKpiCounts.missingCount;
+          } else if (statusFilter === 'found') {
+            totalCount = cachedDashboardKpiCounts.foundCount;
+          } else if (statusFilter === 'not_distributed') {
+            totalCount = cachedDashboardKpiCounts.notDistributedCount;
+          } else {
+            totalCount = cachedDashboardKpiCounts.totalRecords;
+          }
+        } else {
+          const countQueryConstraints: QueryConstraint[] = [];
+          if (statusFilter === 'distributed') {
+            countQueryConstraints.push(where('status', '==', 'distributed'));
+          } else if (statusFilter === 'missing') {
+            countQueryConstraints.push(where('status', '==', 'missing'));
+          } else if (statusFilter === 'found') {
+            countQueryConstraints.push(where('status', '==', 'found'));
+          } else if (statusFilter === 'not_distributed') {
+            countQueryConstraints.push(where('status', '==', 'available'));
+          }
 
-        const countSnap = await withFirestoreRetry(() => getCountFromServer(query(colRef, ...countQueryConstraints)));
-        const totalCount = countSnap.data().count;
+          const countSnap = await withFirestoreRetry(() => getCountFromServer(query(colRef, ...countQueryConstraints)));
+          totalCount = countSnap.data().count;
+        }
 
         return {
           records: filteredRecords,
@@ -1056,238 +1148,44 @@ export async function getPaginatedLicenses(params: PaginatedLicensesParams): Pro
         };
       }
 
-      // 2. WHEN SEARCH QUERY IS PRESENT: DIRECT TARGETED INDEXED FIRESTORE QUERIES
-      const trimmedQuery = searchQuery.trim();
-      const engQuery = nepaliToEnglishDigits(trimmedQuery);
-      const rawUpper = engQuery.toUpperCase();
-      const cleanAlphaNum = cleanAlphanumeric(trimmedQuery);
-      const digits = extractDigits(trimmedQuery);
-
-      const candidateStrings: string[] = [];
-      const addCandidate = (c: string) => {
-        if (c && c.trim() && !candidateStrings.includes(c.trim())) {
-          candidateStrings.push(c.trim());
-        }
-      };
-
-      // Formatted license XX-XX-XXXXXXXX
-      if (digits.length >= 4) {
-        addCandidate(`${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`);
-      }
-      addCandidate(rawUpper);
-      addCandidate(cleanAlphaNum);
-      addCandidate(digits);
-      addCandidate(engQuery);
-      addCandidate(trimmedQuery);
-
-      const foundMap = new Map<string, License>();
-
-      // A. Direct document lookups by ID or sanitized candidate string
-      for (const cand of candidateStrings) {
-        try {
-          const docSnap = await getDoc(doc(db, 'licenses', cand));
-          if (docSnap.exists()) {
-            foundMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() } as License);
-          }
-        } catch (_) {}
+      // 2. WHEN SEARCH QUERY IS PRESENT: DIRECT TARGETED TWO-FIELD INDEXED FIRESTORE QUERY
+      const searchRes = await searchLicenseBySmartIdentifier(searchQuery, { statusFilter });
+      
+      if (!searchRes.success && searchRes.error && searchRes.isQuotaError) {
+        throw new Error(searchRes.error);
       }
 
-      // B. Direct field equality queries (licenseNumber, applicantId, id)
-      for (const cand of candidateStrings) {
-        if (foundMap.size >= 10) break;
-        const fieldQueries = [
-          query(colRef, where('licenseNumber', '==', cand), limit(10)),
-          query(colRef, where('applicantId', '==', cand), limit(10)),
-          query(colRef, where('id', '==', cand), limit(10))
-        ];
-        for (const q of fieldQueries) {
-          try {
-            const snap = await getDocs(q);
-            for (const d of snap.docs) {
-              foundMap.set(d.id, { id: d.id, ...d.data() } as License);
-            }
-          } catch (_) {}
-        }
-      }
-
-      // C. Prefix/Range queries for licenseNumber if candidate string >= 3 chars
-      if (foundMap.size === 0) {
-        const prefixTerms = [rawUpper, cleanAlphaNum, digits, engQuery].filter(s => s && s.length >= 3);
-        for (const p of prefixTerms) {
-          if (foundMap.size >= 10) break;
-          try {
-            const snap = await getDocs(query(colRef, where('licenseNumber', '>=', p), where('licenseNumber', '<=', p + '\uf8ff'), limit(15)));
-            for (const d of snap.docs) {
-              foundMap.set(d.id, { id: d.id, ...d.data() } as License);
-            }
-          } catch (_) {}
-        }
-      }
-
-      // D. Name prefix range queries if name search or no direct ID match
-      if (foundMap.size === 0 || rawUpper.length >= 2) {
-        const titleCase = trimmedQuery.charAt(0).toUpperCase() + trimmedQuery.slice(1).toLowerCase();
-        const lowerCase = trimmedQuery.toLowerCase();
-        const nameTerms = Array.from(new Set([rawUpper, titleCase, lowerCase, trimmedQuery])).filter(s => s && s.length >= 2);
-
-        for (const nameTerm of nameTerms) {
-          if (foundMap.size >= 25) break;
-          try {
-            const snap = await getDocs(query(colRef, where('fullName', '>=', nameTerm), where('fullName', '<=', nameTerm + '\uf8ff'), limit(15)));
-            for (const d of snap.docs) {
-              foundMap.set(d.id, { id: d.id, ...d.data() } as License);
-            }
-          } catch (_) {}
-        }
-      }
-
-      // Convert found Map to normalized array
-      const rawFoundList = Array.from(foundMap.values()).map(r => {
-        if (isLicenseDistributed(r) && r.status !== 'missing' && r.status !== 'found') {
-          return {
-            ...r,
-            status: 'distributed' as const,
-            distributed: true as any,
-            distributionStatus: 'Distributed' as any
-          };
-        }
-        return r;
-      });
-
-      // Filter by statusFilter and match verification
-      const filtered = rawFoundList.filter(l => {
-        // Status filter check
-        if (statusFilter === 'distributed') {
-          if (!(l.status === 'distributed' || isLicenseDistributed(l)) || l.status === 'missing' || l.status === 'found') return false;
-        } else if (statusFilter === 'not_distributed') {
-          if (isLicenseDistributed(l) || l.status === 'missing' || l.status === 'found') return false;
-        } else if (statusFilter === 'missing') {
-          if (l.status !== 'missing') return false;
-        } else if (statusFilter === 'found') {
-          if (l.status !== 'found') return false;
-        }
-
-        // Match check using normalizer or name substring
-        return isLicenseMatch(trimmedQuery, l) || (l.fullName || '').toLowerCase().includes(trimmedQuery.toLowerCase());
-      });
-
-      clearQuotaExceededFlag();
       return {
-        records: filtered,
+        records: searchRes.records,
         lastDocSnap: null,
-        totalCount: filtered.length
+        totalCount: searchRes.records.length
       };
 
     } catch (err: any) {
-      console.error("Failed to fetch paginated licenses from Firestore:", err);
       checkAndTriggerQuotaError(err);
-      throw new Error(`Unable to fetch licensed records from database: ${err?.message || 'Database query error'}`);
+      if (isQuotaOrMemoryError(err)) {
+        console.warn("Firestore quota limit notice during paginated licenses fetch; serving cached/offline data.");
+      } else {
+        console.warn("Notice: Failed to fetch paginated licenses from Firestore:", err?.message || err);
+      }
     }
   }
 
-  // Demo mode or fallback
-  const storeRecords = registryDataStore.getRecords();
-  const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
-  const list = storeRecords.length >= storageRecords.length ? storeRecords : storageRecords;
-  const q = searchQuery.trim().toLowerCase();
-  const filtered = list.filter(l => {
-    const matchesSearch = !q || isLicenseMatch(q, l) || (l.fullName || '').toLowerCase().includes(q);
-    if (!matchesSearch) return false;
-
-    if (statusFilter === 'all' || statusFilter === 'available') return true;
-    if (statusFilter === 'not_distributed') return (!isLicenseDistributed(l) && l.status !== 'found') || l.status === 'missing';
-    if (statusFilter === 'distributed') return isLicenseDistributed(l) && l.status !== 'missing';
-    if (statusFilter === 'missing') return l.status === 'missing';
-    if (statusFilter === 'found') return l.status === 'found';
-    return l.status === statusFilter;
-  });
-
+  // Demo mode or fallback using cached/backup datasets
+  const searchRes = await searchLicenseBySmartIdentifier(searchQuery, { statusFilter });
   return {
-    records: filtered.slice(0, pageSize === 0 ? filtered.length : pageSize),
+    records: searchRes.records.slice(0, pageSize === 0 ? searchRes.records.length : pageSize),
     lastDocSnap: null,
-    totalCount: filtered.length
+    totalCount: searchRes.records.length
   };
 }
 
 export async function getLicenseByLicenseNumber(licenseNo: string): Promise<License | null> {
   if (!licenseNo || !licenseNo.trim()) return null;
-
-  // 1. Convert Nepali digits to English digits & trim
-  const engQuery = nepaliToEnglishDigits(licenseNo).trim();
-  const rawUpper = engQuery.toUpperCase();
-
-  // 2. Extract digits only & clean alphanumeric
-  const digits = engQuery.replace(/\D/g, '');
-  const cleanAlphanumericStr = rawUpper.replace(/[^A-Z0-9]/g, '');
-
-  // 3. Reconstruct candidate queries for Firestore indexed field
-  const candidates: string[] = [];
-
-  // Standard format (XX-XX-XXXXXXXX)
-  if (digits.length >= 4) {
-    const formatted = `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
-    if (formatted && !candidates.includes(formatted)) {
-      candidates.push(formatted);
-    }
+  const result = await searchLicenseBySmartIdentifier(licenseNo);
+  if (result.success && result.records.length > 0) {
+    return result.records[0];
   }
-
-  if (rawUpper && !candidates.includes(rawUpper)) {
-    candidates.push(rawUpper);
-  }
-
-  if (cleanAlphanumericStr && !candidates.includes(cleanAlphanumericStr)) {
-    candidates.push(cleanAlphanumericStr);
-  }
-
-  if (digits && !candidates.includes(digits)) {
-    candidates.push(digits);
-  }
-
-  // Handle Demo Mode fallback
-  if (isDemoModeActive()) {
-    const list = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
-    const match = list.find(l => {
-      if (!l.licenseNumber) return false;
-      const lNorm = nepaliToEnglishDigits(l.licenseNumber.trim()).toUpperCase();
-      const lClean = lNorm.replace(/[^A-Z0-9]/g, '');
-      const lDigits = lNorm.replace(/\D/g, '');
-      return candidates.some(c => lNorm === c || lClean === c || lDigits === c);
-    });
-    return match || null;
-  }
-
-  try {
-    // 4. Query Firestore directly on the indexed 'licenseNumber' field
-    for (const candidate of candidates) {
-      const q = query(collection(db, 'licenses'), where('licenseNumber', '==', candidate), limit(1));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        clearQuotaExceededFlag();
-        return { id: snap.docs[0].id, ...snap.docs[0].data() } as License;
-      }
-
-      // Check document ID as fallback if ID matches candidate
-      const docSnap = await getDoc(doc(db, 'licenses', candidate));
-      if (docSnap.exists()) {
-        clearQuotaExceededFlag();
-        const data = { id: docSnap.id, ...docSnap.data() } as License;
-        return data;
-      }
-    }
-  } catch (err) {
-    console.warn("Firestore indexed query for licenseNumber failed:", err);
-    checkAndTriggerQuotaError(err);
-    const list = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
-    const match = list.find(l => {
-      if (!l.licenseNumber) return false;
-      const lNorm = nepaliToEnglishDigits(l.licenseNumber.trim()).toUpperCase();
-      const lClean = lNorm.replace(/[^A-Z0-9]/g, '');
-      const lDigits = lNorm.replace(/\D/g, '');
-      return candidates.some(c => lNorm === c || lClean === c || lDigits === c);
-    });
-    return match || null;
-  }
-
   return null;
 }
 
@@ -2591,7 +2489,17 @@ export async function restoreDemoChangesToFirestore(): Promise<void> {
 
 // ==================== UPLOAD LEDGERS SERVICES ====================
 
-export async function getAllUploadLedgers(): Promise<UploadLedger[]> {
+let cachedUploadLedgers: UploadLedger[] | null = null;
+
+export async function getAllUploadLedgers(forceRefresh: boolean = false): Promise<UploadLedger[]> {
+  if (!forceRefresh && cachedUploadLedgers && cachedUploadLedgers.length > 0) {
+    return cachedUploadLedgers;
+  }
+
+  if (isDemoModeActive()) {
+    return fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
+  }
+
   try {
     const colRef = collection(db, 'upload_ledgers');
     let snap;
@@ -2610,10 +2518,22 @@ export async function getAllUploadLedgers(): Promise<UploadLedger[]> {
       const timeB = typeof b.timestamp === 'string' ? b.timestamp : (b.timestamp && typeof (b.timestamp as any).toDate === 'function' ? (b.timestamp as any).toDate().toISOString() : '');
       return timeB.localeCompare(timeA);
     });
+    cachedUploadLedgers = list;
+    if (typeof localStorage !== 'undefined' && list.length > 0) {
+      try {
+        localStorage.setItem('plsms_mock_ledgers', JSON.stringify(list));
+      } catch (_) {}
+    }
     return list;
   } catch (error: any) {
-    console.error("Failed to load upload ledgers from Firestore:", error);
-    throw new Error(`Unable to fetch upload history: ${error?.message || 'Database query error'}`);
+    checkAndTriggerQuotaError(error);
+    if (isQuotaOrMemoryError(error)) {
+      console.warn("Firestore quota limit notice while loading upload ledgers; returning cached ledgers.");
+    } else {
+      console.warn("Failed to load upload ledgers from Firestore:", error?.message || error);
+    }
+    const fallbackList = cachedUploadLedgers || fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
+    return fallbackList;
   }
 }
 
@@ -3178,6 +3098,65 @@ export interface AlphabeticalSummaryResult {
   totalRemained: number;
 }
 
+export function calculateDemoAlphabeticalSummary(): AlphabeticalSummaryResult {
+  const storeRecords = registryDataStore.getRecords();
+  const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
+  const backupRecords = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
+  let list = storeRecords;
+  if (storageRecords.length > list.length) list = storageRecords;
+  if (backupRecords.length > list.length) list = backupRecords;
+
+  const alphabets = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+  const statsMap: Record<string, { count: number; distributed: number }> = {};
+  alphabets.forEach(alpha => {
+    statsMap[alpha] = { count: 0, distributed: 0 };
+  });
+
+  let otherCount = 0;
+  let otherDistributed = 0;
+  let overallTotal = 0;
+  let overallDistributed = 0;
+
+  list.forEach(lic => {
+    if (!lic) return;
+    overallTotal++;
+    const isDist = lic.status === 'distributed' || isLicenseDistributed(lic);
+    if (isDist) overallDistributed++;
+
+    const clean = (lic.fullName || '').replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').trim().toUpperCase();
+    const firstChar = clean.length > 0 ? clean.charAt(0) : '';
+
+    if (firstChar >= 'A' && firstChar <= 'Z') {
+      statsMap[firstChar].count++;
+      if (isDist) statsMap[firstChar].distributed++;
+    } else {
+      otherCount++;
+      if (isDist) otherDistributed++;
+    }
+  });
+
+  const stats: AlphabetStat[] = alphabets.map(alpha => ({
+    alphabet: alpha,
+    count: statsMap[alpha].count,
+    distributed: statsMap[alpha].distributed,
+    remained: Math.max(0, statsMap[alpha].count - statsMap[alpha].distributed)
+  }));
+
+  stats.push({
+    alphabet: 'OTHERS / अन्य',
+    count: otherCount,
+    distributed: otherDistributed,
+    remained: Math.max(0, otherCount - otherDistributed)
+  });
+
+  return {
+    alphabetStats: stats,
+    totalCount: overallTotal,
+    totalDistributed: overallDistributed,
+    totalRemained: Math.max(0, overallTotal - overallDistributed)
+  };
+}
+
 export async function getAlphabeticalSummary(
   startDateBS?: string, 
   endDateBS?: string,
@@ -3257,6 +3236,32 @@ export async function getAlphabeticalSummary(
       return result;
     }
 
+    // Check persistent Firestore summary document /dashboard_stats/alphabetical (costs 1 read)
+    if (!isDateFiltered && !forceRefresh) {
+      try {
+        const docSnap = await withFirestoreRetry(() => getDoc(doc(db, 'dashboard_stats', 'alphabetical')));
+        if (docSnap.exists()) {
+          const data = docSnap.data() as any;
+          if (data && Array.isArray(data.alphabetStats) && data.alphabetStats.length >= 26) {
+            const sumTotal = data.alphabetStats.reduce((acc: number, row: AlphabetStat) => acc + (row.count || 0), 0);
+            const sumDist = data.alphabetStats.reduce((acc: number, row: AlphabetStat) => acc + (row.distributed || 0), 0);
+            const sumRem = data.alphabetStats.reduce((acc: number, row: AlphabetStat) => acc + (row.remained || 0), 0);
+
+            const result: AlphabeticalSummaryResult = {
+              alphabetStats: data.alphabetStats,
+              totalCount: data.totalCount ?? sumTotal,
+              totalDistributed: data.totalDistributed ?? sumDist,
+              totalRemained: data.totalRemained ?? sumRem
+            };
+            cachedAlphabeticalSummary = { data: result, timestamp: Date.now() };
+            return result;
+          }
+        }
+      } catch (docErr) {
+        console.warn("Persistent alphabetical summary check notice:", docErr);
+      }
+    }
+
     try {
       const colRef = collection(db, 'licenses');
       const kpis = await getDashboardKpiCounts(forceRefresh);
@@ -3310,14 +3315,31 @@ export async function getAlphabeticalSummary(
         totalRemained: sumRem
       };
 
+      // Persist to /dashboard_stats/alphabetical so subsequent loads cost only 1 document read
+      try {
+        await setDoc(doc(db, 'dashboard_stats', 'alphabetical'), {
+          ...result,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (persistErr) {
+        console.warn("Could not save persistent alphabetical summary:", persistErr);
+      }
+
       if (!isDateFiltered) {
         cachedAlphabeticalSummary = { data: result, timestamp: Date.now() };
       }
       return result;
     } catch (err: any) {
-      console.error("Failed to load alphabetical summary from database:", err);
       checkAndTriggerQuotaError(err);
-      throw new Error(`Unable to retrieve alphabetical summary: ${err?.message || 'Database connection error'}`);
+      if (isQuotaOrMemoryError(err)) {
+        console.warn("Firestore quota limit notice during alphabetical summary; returning cached/store summary.");
+      } else {
+        console.warn("Notice: Failed to load alphabetical summary from database:", err?.message || err);
+      }
+      if (cachedAlphabeticalSummary) {
+        return cachedAlphabeticalSummary.data;
+      }
+      return calculateDemoAlphabeticalSummary();
     } finally {
       if (!isDateFiltered) {
         alphabeticalSummaryPromise = null;
@@ -3361,8 +3383,24 @@ export async function getLicensesByAlphabet(
     const snap = await withFirestoreRetry(() => getDocs(q));
     return snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
   } catch (err: any) {
-    console.error(`Failed to fetch licenses for alphabet ${alpha}:`, err);
-    throw new Error(`Unable to load records for letter ${alpha}: ${err?.message || 'Database query error'}`);
+    checkAndTriggerQuotaError(err);
+    if (isQuotaOrMemoryError(err)) {
+      console.warn(`Firestore quota limit notice while fetching licenses for letter ${alpha}; falling back to store dataset.`);
+    } else {
+      console.warn(`Failed to fetch licenses for alphabet ${alpha}:`, err?.message || err);
+    }
+    const storeRecords = registryDataStore.getRecords();
+    const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
+    const list = storeRecords.length >= storageRecords.length ? storeRecords : storageRecords;
+    const cleanAlpha = (alpha || '').toUpperCase().trim();
+    return list.filter(l => {
+      const name = (l.fullName || '').trim();
+      const first = name.replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').charAt(0).toUpperCase();
+      if (cleanAlpha.startsWith('OTHER')) {
+        return first < 'A' || first > 'Z';
+      }
+      return first === cleanAlpha;
+    });
   }
 }
 

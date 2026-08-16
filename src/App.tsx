@@ -305,7 +305,7 @@ export default function App() {
     }
   }, [isPlsmsPath, isStaff]);
 
-  const theme = isStaff ? userTheme : 'light';
+  const theme = userTheme;
 
   useEffect(() => {
     const body = document.body;
@@ -1212,8 +1212,8 @@ export default function App() {
           <span>←</span> नागरिक खोज गृहपृष्ठ (Back to Citizen Search)
         </button>
 
-        {/* Main Card Container (Matching Picture 1) */}
-        <div className="w-full bg-white rounded-2xl border border-slate-200/90 shadow-xl overflow-hidden transition-all duration-200">
+        {/* Main Card Container (Matching Picture with Dark Blue Thick Border) */}
+        <div className="w-full bg-white rounded-2xl sm:rounded-3xl border-2 sm:border-[3px] border-[#1e3a8a] shadow-2xl overflow-hidden transition-all duration-200">
           
           {/* National Blue Header Block with Red Line */}
           <div className="bg-[#1e3a8a] px-6 py-6 text-center border-b-[4px] border-[#da251d] relative">
@@ -1398,20 +1398,24 @@ export default function App() {
     <PageTitleProvider defaultTitle={currentMenuTitle}>
       <div className={`min-h-screen font-sans selection:bg-cyan-900 selection:text-white antialiased transition-colors duration-200 ${
         !isStaff
-          ? 'bg-slate-50 py-2 sm:py-8 px-1 sm:px-4 flex flex-col justify-center items-center'
+          ? (theme === 'dark' 
+              ? 'bg-slate-950 text-slate-100 py-2 sm:py-8 px-1 sm:px-4 flex flex-col justify-center items-center' 
+              : 'bg-slate-50 text-slate-900 py-2 sm:py-8 px-1 sm:px-4 flex flex-col justify-center items-center')
           : theme === 'dark' 
             ? 'bg-slate-950 text-slate-100 selection:bg-cyan-950 selection:text-cyan-400' 
             : 'bg-slate-50 text-slate-900 selection:bg-cyan-200 selection:text-cyan-900'
       }`}>
         <div className={!isStaff 
-          ? "w-full max-w-5xl bg-white border-2 sm:border-[3px] border-[#1e3a8a] rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col"
+          ? (theme === 'dark' 
+              ? "w-full max-w-5xl bg-slate-900 border-2 sm:border-[3px] border-slate-700 rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col text-slate-100" 
+              : "w-full max-w-5xl bg-white border-2 sm:border-[3px] border-[#1e3a8a] rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col")
           : `mx-auto w-full max-w-[1440px] xl:max-w-[1600px] 2xl:max-w-[1800px] min-h-screen flex flex-col justify-between border-x transition-all duration-200 ${
               theme === 'dark'
                 ? 'bg-slate-900 border-slate-800 shadow-2xl'
                 : 'bg-[#faf6ee] border-[#1e3a8a] shadow-xl'
             }`
         }>
-          <header className={!isStaff ? "w-full overflow-hidden" : `transition-all duration-200 mx-4 sm:mx-14 md:mx-32 lg:mx-40 xl:mx-48 mt-4 rounded-2xl md:rounded-3xl overflow-hidden shadow-md border ${
+          <header className={!isStaff ? (theme === 'dark' ? "w-full overflow-hidden bg-slate-900" : "w-full overflow-hidden") : `transition-all duration-200 mx-4 sm:mx-14 md:mx-32 lg:mx-40 xl:mx-48 mt-4 rounded-2xl md:rounded-3xl overflow-hidden shadow-md border ${
             theme === 'dark' ? 'border-slate-800 bg-slate-900' : 'border-slate-200/60 bg-white'
           }`}>
             {/* National Blue Government Banner (Picture 2 theme) */}
@@ -1462,16 +1466,15 @@ export default function App() {
                           <span className="text-xs font-black tracking-wider text-white uppercase">QR CODE</span>
                         </button>
 
-                        {isAdmin && (
-                          <button
-                            onClick={() => setUserTheme(userTheme === 'dark' ? 'light' : 'dark')}
-                            type="button"
-                            title="Toggle Dark/Light Mode"
-                            className="p-1 rounded-full text-white transition-all duration-300 active:scale-90 cursor-pointer hover:bg-white/10"
-                          >
-                            {userTheme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-300" /> : <Moon className="w-3.5 h-3.5 text-cyan-200" />}
-                          </button>
-                        )}
+                        <button
+                          onClick={() => setUserTheme(userTheme === 'dark' ? 'light' : 'dark')}
+                          type="button"
+                          title={userTheme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                          aria-label="Toggle Dark/Light Mode"
+                          className="p-1.5 rounded-full text-white transition-all duration-300 active:scale-90 cursor-pointer hover:bg-white/15 border border-white/20 hover:border-white/40 flex items-center justify-center backdrop-blur-xs"
+                        >
+                          {userTheme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-300 drop-shadow-xs" /> : <Moon className="w-3.5 h-3.5 text-cyan-200 drop-shadow-xs" />}
+                        </button>
                       </div>
 
                       {/* Nepali Clock Widget */}
@@ -1562,16 +1565,15 @@ export default function App() {
                       </button>
 
                       {/* Theme Changer Icon Button */}
-                      {isAdmin && (
-                        <button
-                          onClick={() => setUserTheme(userTheme === 'dark' ? 'light' : 'dark')}
-                          type="button"
-                          title="Toggle Dark/Light Mode"
-                          className="p-1 rounded-full text-white transition-all duration-300 active:scale-90 cursor-pointer hover:bg-white/10"
-                        >
-                          {userTheme === 'dark' ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-cyan-200" />}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => setUserTheme(userTheme === 'dark' ? 'light' : 'dark')}
+                        type="button"
+                        title={userTheme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                        aria-label="Toggle Dark/Light Mode"
+                        className="p-1.5 rounded-full text-white transition-all duration-300 active:scale-90 cursor-pointer hover:bg-white/15 border border-white/20 hover:border-white/40 flex items-center justify-center backdrop-blur-xs"
+                      >
+                        {userTheme === 'dark' ? <Sun className="w-4 h-4 text-amber-300 drop-shadow-xs" /> : <Moon className="w-4 h-4 text-cyan-200 drop-shadow-xs" />}
+                      </button>
 
                       {/* LOG OUT / STAFF LOGIN button */}
                       {currentUser ? (
@@ -2197,17 +2199,21 @@ export default function App() {
 
       {/* Dynamic S7 search counter and styling Footer */}
       {!isStaff ? (
-        <div className="py-2.5 px-4 bg-white mt-auto border-t border-slate-100">
+        <div className={`py-2.5 px-4 mt-auto border-t transition-colors ${
+          theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
+        }`}>
           <div className="mx-auto flex flex-col md:flex-row items-center justify-between gap-3 text-xs font-medium">
-            <div className="text-center md:text-left text-[8.5px] xs:text-[10px] sm:text-[11.5px] font-normal text-slate-700 tracking-normal max-w-xl space-y-0.5 sm:space-y-1">
+            <div className={`text-center md:text-left text-[8.5px] xs:text-[10px] sm:text-[11.5px] font-normal tracking-normal max-w-xl space-y-0.5 sm:space-y-1 ${
+              theme === 'dark' ? 'text-slate-300' : 'text-slate-700'
+            }`}>
               {(() => {
                 const footerText = settings.websiteFooter || "© 2026 Transport Management Office, Driving License, Itahari, Sunsari. Authorized Use Only. All operations are logged and monitored for security compliance.";
                 if (footerText.includes("All operations are logged")) {
                   const parts = footerText.split(/(?=All operations are logged)/i);
                   return (
                     <>
-                      <div className="leading-snug text-slate-700 font-normal">{parts[0].trim()}</div>
-                      <div className="leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal text-slate-600">
+                      <div className={`leading-snug font-normal ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{parts[0].trim()}</div>
+                      <div className={`leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
                         {parts[1] ? parts[1].trim() : "All operations are logged and monitored for security compliance."}
                       </div>
                     </>
@@ -2217,8 +2223,8 @@ export default function App() {
                   const parts = footerText.split(/(?=Authorized Use Only)/i);
                   return (
                     <>
-                      <div className="leading-snug text-slate-700 font-normal">{parts[0].trim()}</div>
-                      <div className="leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal text-slate-600">
+                      <div className={`leading-snug font-normal ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{parts[0].trim()}</div>
+                      <div className={`leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
                         {parts[1] ? parts[1].trim() : "Authorized Use Only."}
                       </div>
                     </>
@@ -2228,8 +2234,8 @@ export default function App() {
                   const parts = footerText.split(/(?=All Rights Reserved)/i);
                   return (
                     <>
-                      <div className="leading-snug text-slate-700 font-normal">{parts[0].trim()}</div>
-                      <div className="leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal text-slate-600">
+                      <div className={`leading-snug font-normal ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{parts[0].trim()}</div>
+                      <div className={`leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
                         All Rights Reserved.
                       </div>
                     </>
@@ -2242,21 +2248,27 @@ export default function App() {
                   const line2 = footerText.substring(firstPeriod + 1).trim();
                   return (
                     <>
-                      <div className="leading-snug text-slate-700 font-normal">{line1}</div>
-                      {line2 && <div className="leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal text-slate-600">{line2}</div>}
+                      <div className={`leading-snug font-normal ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{line1}</div>
+                      {line2 && <div className={`leading-snug text-[7.5px] xs:text-[9px] sm:text-[10.5px] font-normal ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>{line2}</div>}
                     </>
                   );
                 }
-                return <div className="leading-snug text-slate-700 font-normal">{footerText}</div>;
+                return <div className={`leading-snug font-normal ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{footerText}</div>;
               })()}
             </div>
 
             {/* S7 SEARCH COUNTER */}
-            <div className="px-4 py-1.5 sm:px-6 sm:py-2 rounded-lg sm:rounded-xl flex flex-col items-center justify-center gap-0.5 shrink-0 border border-cyan-200 bg-white shadow-xs min-w-[140px] sm:min-w-[180px]">
-              <span className="font-mono text-sm sm:text-lg font-black tracking-wider leading-tight text-blue-600">
+            <div className={`px-4 py-1.5 sm:px-6 sm:py-2 rounded-lg sm:rounded-xl flex flex-col items-center justify-center gap-0.5 shrink-0 border shadow-xs min-w-[140px] sm:min-w-[180px] transition-colors ${
+              theme === 'dark' ? 'bg-slate-950 border-slate-800' : 'bg-white border-cyan-200'
+            }`}>
+              <span className={`font-mono text-sm sm:text-lg font-black tracking-wider leading-tight ${
+                theme === 'dark' ? 'text-blue-400' : 'text-blue-600'
+              }`}>
                 {searchesServed.toLocaleString()}
               </span>
-              <span className="text-[8.5px] sm:text-[9.5px] uppercase font-extrabold tracking-wider text-slate-600">
+              <span className={`text-[8.5px] sm:text-[9.5px] uppercase font-extrabold tracking-wider ${
+                theme === 'dark' ? 'text-slate-400' : 'text-slate-600'
+              }`}>
                 VISITOR SEARCH COUNTER
               </span>
             </div>

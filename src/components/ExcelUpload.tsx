@@ -25,8 +25,7 @@ interface ParsedRow {
   fatherHusbandName?: string;
   licenseNumber?: string;
   category?: string;
-  contactDepartment?: string;
-  officeVisitDay?: string;
+  department?: string;
   [key: string]: any;
 }
 
@@ -49,6 +48,8 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
     skipped: number;
     updated: number;
     errors: string[];
+    ledgerFailed?: boolean;
+    ledgerErrorMessage?: string;
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -156,10 +157,8 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
             initialMapping['oldCode'] = col;
           } else if (norm.includes('newcode') || norm.includes('new') || norm === 'new_code') {
             initialMapping['newCode'] = col;
-          } else if (norm.includes('contactdepartment') || norm.includes('contactdeparfment') || norm.includes('contactdept') || norm.includes('department') || norm.includes('dept') || norm.includes('visit') || norm.includes('day') || norm.includes('scheduled') || norm.includes('visitdate') || norm.includes('visit_date') || norm.includes('date')) {
+          } else if (norm.includes('department') || norm.includes('departmen') || norm.includes('dept')) {
             initialMapping['department'] = col;
-            initialMapping['contactDepartment'] = col;
-            initialMapping['officeVisitDay'] = col;
           } else if (norm.includes('received') || norm.includes('receiver') || norm.includes('receivedby') || norm === 'received_by') {
             initialMapping['receivedBy'] = col;
           } else if (norm.includes('distributeddate') || norm.includes('distdate') || norm.includes('distributed_date')) {
@@ -422,11 +421,14 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         const category = String(row[columnMapping['category']] || 'LTV').trim();
         const rawDept = String(
           row[columnMapping['department']] || 
-          row[columnMapping['contactDepartment']] || 
-          row[columnMapping['officeVisitDay']] || 
+          row['DEPARTMENT'] ||
+          row['Department'] ||
+          row['department'] ||
+          row['DEPT'] ||
+          row['Dept'] ||
+          row['dept'] ||
           ''
         ).trim();
-        const visitDay = rawDept || 'Monday - Friday (9 AM - 4 PM)';
         const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
         const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
         const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (rowIdx + 1);
@@ -470,8 +472,6 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
           licenseNumber: rawLicenseNo,
           category: category || 'LTV',
           department: rawDept || undefined,
-          contactDepartment: rawDept || visitDay,
-          officeVisitDay: visitDay,
           oldCode,
           newCode,
           sn,
@@ -549,10 +549,15 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         ...verificationMetrics
       };
 
+      let ledgerFailed = false;
+      let ledgerErrorMessage = '';
       try {
         await createUploadLedger(ledgerEntry);
-      } catch (ledgerErr) {
-        console.warn("Notice saving upload ledger entry:", ledgerErr);
+      } catch (ledgerErr: any) {
+        console.error("Critical: Failed to save upload ledger entry:", ledgerErr);
+        ledgerFailed = true;
+        ledgerErrorMessage = ledgerErr?.message || 'Database error occurred while recording ledger';
+        errorsList.push(`LICENSE DATA COMMITTED — LEDGER CREATION FAILED: ${ledgerErrorMessage}`);
       }
 
       setReport({
@@ -560,7 +565,9 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         imported,
         skipped,
         updated,
-        errors: errorsList
+        errors: errorsList,
+        ledgerFailed,
+        ledgerErrorMessage
       });
       if ((imported + updated) > 0) {
         registryDataStore.notifySubscribers();
@@ -750,7 +757,7 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
                   { key: 'category', label: 'Category' },
                   { key: 'oldCode', label: 'Old Code' },
                   { key: 'newCode', label: 'New Code' },
-                  { key: 'contactDepartment', label: 'Contact Department' },
+                  { key: 'department', label: 'Department' },
                   { key: 'receivedBy', label: 'Received By' },
                   { key: 'distributedDate', label: 'Distributed Date' },
                   { key: 'distributedBy', label: 'Distributed By' },
@@ -922,13 +929,20 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
               theme === 'dark' ? 'bg-slate-950 text-white border-slate-800' : 'bg-white text-slate-850 text-slate-800 border-slate-200'
             }`}>
               <div className={`flex items-center gap-2 text-xs font-bold uppercase tracking-widest border-b pb-2 ${
-                report.errors.length > 0 && (report.imported + report.updated) === 0
-                  ? 'text-red-500 border-slate-900'
-                  : report.errors.length > 0
-                    ? 'text-amber-500 border-slate-900'
-                    : theme === 'dark' ? 'text-emerald-400 border-slate-900' : 'text-emerald-650 border-slate-100'
+                report.ledgerFailed
+                  ? 'text-amber-500 border-amber-800/60'
+                  : report.errors.length > 0 && (report.imported + report.updated) === 0
+                    ? 'text-red-500 border-slate-900'
+                    : report.errors.length > 0
+                      ? 'text-amber-500 border-slate-900'
+                      : theme === 'dark' ? 'text-emerald-400 border-slate-900' : 'text-emerald-650 border-slate-100'
               }`}>
-                {report.errors.length > 0 && (report.imported + report.updated) === 0 ? (
+                {report.ledgerFailed ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4 text-amber-500 animate-pulse" />
+                    <span>LICENSE DATA COMMITTED — LEDGER CREATION FAILED</span>
+                  </>
+                ) : report.errors.length > 0 && (report.imported + report.updated) === 0 ? (
                   <>
                     <AlertCircle className="w-4 h-4 text-red-500" />
                     <span>Upload Failed — Database Commit Error</span>

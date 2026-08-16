@@ -28,6 +28,7 @@ import SmartCardDashboard from './SmartCardDashboard';
 import { HistoryAutocompleteField } from './HistoryAutocompleteField';
 import { HistorySuggestionService } from '../utils/HistorySuggestionService';
 import { isLicenseMatch, nepaliToEnglishDigits } from '../utils/licenseNormalizer';
+import { classifySearchInput } from '../utils/searchClassifier';
 import { exportReportToExcel, exportReportToPdf, exportReportToCsv, exportIntegratedReportToExcel } from '../utils/reportExportEngine';
 
 interface StaffDashboardProps {
@@ -173,7 +174,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   const [fhName, setFhName] = useState('');
   const [licenseNo, setLicenseNo] = useState('');
   const [category, setCategory] = useState('LTV');
-  const [visitDay, setVisitDay] = useState('Monday');
+  const [department, setDepartment] = useState('');
   const [addLoading, setAddLoading] = useState(false);
 
   // History log modal state
@@ -325,11 +326,11 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
 
   const refreshDashboardLightweight = useCallback(async () => {
     try {
-      // Step 1 & Step 3: Refresh Dashboard KPI cards (Total Smart Cards, Not Distributed, Distributed, Missing, Found)
+      // Refresh Dashboard KPI cards
       const kpis = await getDashboardKpiCounts();
       setServerKpiCounts(kpis);
 
-      // Step 2 & Step 4: Refresh the first visible table page using current page size
+      // Refresh the first visible table page using current page size
       const currentSize = pageSize > 0 ? pageSize : 100;
       const paginatedRes = await getPaginatedLicenses({
         pageSize: currentSize,
@@ -364,21 +365,28 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
     }
   }, [pageSize, activeRegister, searchQuery]);
 
+  // Stable ref for subscriber to avoid re-subscribing on tab/query changes
+  const refreshCallbackRef = React.useRef(refreshDashboardLightweight);
+  useEffect(() => {
+    refreshCallbackRef.current = refreshDashboardLightweight;
+  }, [refreshDashboardLightweight]);
+
+  // Mount-only bootstrap: load metadata, KPIs, requests, ledgers, stats, settings & roles ONCE on initial load
   useEffect(() => {
     const unsubscribe = registryDataStore.subscribe(() => {
-      refreshDashboardLightweight();
+      refreshCallbackRef.current?.();
     });
     fetchData();
     return () => {
       unsubscribe();
     };
-  }, [refreshDashboardLightweight]);
+  }, []);
 
   const fetchData = async () => {
     setLoading(true);
     setFetchError(null);
     try {
-      // 1. Fetch KPI counts directly from Firestore Aggregate Count queries
+      // 1. Fetch KPI counts directly from Firestore Aggregate Count / Summary
       try {
         const kpis = await getDashboardKpiCounts();
         setServerKpiCounts(kpis);
@@ -387,29 +395,12 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         setFetchError(kpiErr?.message || "Failed to load database counts.");
       }
 
-      // 2. Fetch initial page of records using Firestore server-side pagination
-      try {
-        const paginatedRes = await getPaginatedLicenses({
-          pageSize: pageSize || 100,
-          statusFilter: activeRegister,
-          searchQuery
-        });
-        setLicenses(paginatedRes.records);
-        setServerTotalCount(paginatedRes.totalCount);
-        if (paginatedRes.lastDocSnap) {
-          setPageDocSnaps([null, paginatedRes.lastDocSnap]);
-        }
-      } catch (pagErr: any) {
-        console.warn("Could not load initial paginated records:", pagErr);
-        setFetchError(pagErr?.message || "Failed to load register records.");
-      }
-
       // 2. Fetch Requests count
       const reqList = await getAllCollectionRequests();
       setRequestsCount(reqList.length);
       setCollectionRequests(reqList);
 
-      // Fetch Upload Ledgers
+      // 3. Fetch Upload Ledgers
       try {
         const ledgers = await getAllUploadLedgers();
         setUploadLedgers(ledgers);
@@ -417,11 +408,11 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         console.warn("Could not load upload ledgers:", ledgErr);
       }
 
-      // 3. Fetch search stats
+      // 4. Fetch search stats
       const totalCount = await getSearchesServedCount();
       setSearchesCount(totalCount);
 
-      // 4. Fetch office settings
+      // 5. Fetch office settings
       try {
         const settings = await getOfficeSettings();
         setOfficeSettings(settings);
@@ -429,7 +420,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         console.warn("Could not retrieve office settings:", settingsErr);
       }
 
-      // 5. Fetch user roles registry (staff registry list)
+      // 6. Fetch user roles registry (staff registry list)
       try {
         const rolesList = await getAllUserRoles();
         setUsersRoles(rolesList);
@@ -498,8 +489,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         fullName: fullName.trim(),
         licenseNumber: licenseNo.trim(),
         category: category,
-        contactDepartment: visitDay,
-        officeVisitDay: visitDay,
+        department: department.trim() || undefined,
         status: 'available',
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1091,31 +1081,47 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   // Pending statistics connected to centralized Registry Data Store
   const pendingRequestsCount = collectionRequests.length;
 
-  useEffect(() => {
-    setCurrentPage(1);
-    setPageDocSnaps([null]);
-  }, [debouncedSearchQuery, activeRegister, pageSize]);
+  // Track previous filter state to prevent duplicate queries on filter reset
+  const prevFilterState = React.useRef({ activeRegister, debouncedSearchQuery, pageSize });
 
   useEffect(() => {
     let active = true;
     const fetchPage = async () => {
       try {
         setIsSearching(true);
-        const lastDocSnap = pageDocSnaps[currentPage - 1] || null;
+        const filtersChanged = 
+          prevFilterState.current.activeRegister !== activeRegister ||
+          prevFilterState.current.debouncedSearchQuery !== debouncedSearchQuery ||
+          prevFilterState.current.pageSize !== pageSize;
+
+        if (filtersChanged) {
+          prevFilterState.current = { activeRegister, debouncedSearchQuery, pageSize };
+          if (currentPage !== 1) {
+            setCurrentPage(1);
+            setPageDocSnaps([null]);
+            return;
+          }
+          setPageDocSnaps([null]);
+        }
+
+        const effectivePage = filtersChanged ? 1 : currentPage;
+        const lastDocSnap = effectivePage === 1 ? null : (pageDocSnaps[effectivePage - 1] || null);
+
         const res = await getPaginatedLicenses({
           pageSize: pageSize === 0 ? 0 : pageSize,
           lastDocSnap,
           statusFilter: activeRegister,
           searchQuery: debouncedSearchQuery
         });
+
         if (active) {
           setLicenses(res.records);
           setServerTotalCount(res.totalCount);
           setFetchError(null);
           if (res.lastDocSnap) {
             setPageDocSnaps(prev => {
-              const updated = [...prev];
-              updated[currentPage] = res.lastDocSnap;
+              const updated = filtersChanged ? [null] : [...prev];
+              updated[effectivePage] = res.lastDocSnap;
               return updated;
             });
           }
@@ -1671,42 +1677,64 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
           </div>
 
           {/* Search Box */}
-          <div className="relative flex items-center">
-            <Search className={`absolute left-3.5 top-3 w-4 h-4 ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search current register by license number, name, or applicant code..."
-              className={`w-full pl-10 pr-24 py-2.5 rounded-xl border text-xs focus:outline-hidden transition-all ${
-                isDark 
-                  ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500 focus:border-cyan-500' 
-                  : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400 focus:border-cyan-500 focus:bg-white focus:shadow-xs'
-              }`}
-            />
-            <div className="absolute right-3 flex items-center gap-2">
-              {isSearching && (
-                <span className="flex items-center gap-1 text-[10px] font-bold text-cyan-500 animate-pulse shrink-0">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  Searching...
-                </span>
-              )}
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setDebouncedSearchQuery('');
-                  }}
-                  className={`p-1 rounded-full hover:bg-slate-800/20 text-xs font-bold transition-colors cursor-pointer shrink-0 ${
-                    isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
-                  }`}
-                  title="Clear search"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
+          <div className="space-y-1.5">
+            <div className="relative flex items-center">
+              <Search className={`absolute left-3.5 top-3 w-4 h-4 ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Enter License Number or Applicant ID..."
+                className={`w-full pl-10 pr-32 py-2.5 rounded-xl border text-xs focus:outline-hidden transition-all ${
+                  isDark 
+                    ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500 focus:border-cyan-500' 
+                    : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400 focus:border-cyan-500 focus:bg-white focus:shadow-xs'
+                }`}
+              />
+              <div className="absolute right-3 flex items-center gap-2">
+                {isSearching && (
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-cyan-500 animate-pulse shrink-0">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    {(() => {
+                      const cl = classifySearchInput(searchQuery);
+                      if (cl.type === 'LICENSE_NUMBER') return 'Searching License Number...';
+                      if (cl.type === 'APPLICANT_ID') return 'Searching Applicant ID...';
+                      return 'Searching...';
+                    })()}
+                  </span>
+                )}
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setDebouncedSearchQuery('');
+                    }}
+                    className={`p-1 rounded-full hover:bg-slate-800/20 text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                      isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
+
+            {/* Local Validation Status Warning if malformed or invalid */}
+            {(() => {
+              if (!searchQuery.trim()) return null;
+              const cl = classifySearchInput(searchQuery);
+              if (cl.type === 'INVALID') {
+                return (
+                  <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{cl.errorMessage}</span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           {/* Ledger Table */}
@@ -1736,7 +1764,12 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             }`}>
               <p>
                 {searchQuery.trim()
-                  ? `No matching license records found for "${searchQuery}" under this register.`
+                  ? (() => {
+                      const cl = classifySearchInput(searchQuery);
+                      if (cl.type === 'LICENSE_NUMBER') return `No record found for License Number "${cl.normalizedQuery}" under this register.`;
+                      if (cl.type === 'APPLICANT_ID') return `No record found for Applicant ID "${cl.normalizedQuery}" under this register.`;
+                      return "No matching record found.";
+                    })()
                   : "No licensed entries under this register match current view constraints."}
               </p>
               {searchQuery.trim() && (
@@ -3174,19 +3207,14 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Representative Pickup Day</label>
-                  <select
-                    value={visitDay}
-                    onChange={(e) => setVisitDay(e.target.value)}
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Department</label>
+                  <input
+                    type="text"
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    placeholder="e.g., Department Name"
                     className="w-full bg-slate-950 border border-slate-800 px-3.5 py-2.5 rounded-xl text-xs text-white focus:outline-hidden focus:border-cyan-500 font-medium"
-                  >
-                    <option value="Sunday">Sunday (आईतवार)</option>
-                    <option value="Monday">Monday (सोमवार)</option>
-                    <option value="Tuesday">Tuesday (मंगलवार)</option>
-                    <option value="Wednesday">Wednesday (बुधवार)</option>
-                    <option value="Thursday">Thursday (बिहीवार)</option>
-                    <option value="Friday">Friday (शुक्रवार)</option>
-                  </select>
+                  />
                 </div>
               </div>
 

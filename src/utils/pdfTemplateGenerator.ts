@@ -106,14 +106,14 @@ export async function downloadPdfSampleTemplate(): Promise<void> {
 
   // Sample Rows Data
   const sampleRows = [
-    ["1", "1025443", "Ram Bahadur Shrestha", "01-06-00021350", "LTV (B)", "A-304", "B-987", "Sunday (10-3)", "System Admin", "12/05/2025", "Staff 01"],
-    ["2", "1025444", "Sita Maya Tamang", "01-06-00021351", "Motorcycle (A)", "A-305", "B-988", "Sunday (10-3)", "System Admin", "12/05/2025", "Staff 01"],
-    ["3", "1025445", "Hari Prasad Dahal", "01-06-00021352", "Heavy (C, E)", "A-306", "B-989", "Monday (10-3)", "System Admin", "", ""],
-    ["4", "1025446", "Anita Kumari Rai", "01-06-00021353", "Scooter (K)", "A-307", "B-990", "Monday (10-3)", "System Admin", "", ""],
-    ["5", "1025447", "Bikram Thapa", "01-06-00021354", "Car/Jeep (B)", "A-308", "B-991", "Tuesday (10-3)", "System Admin", "", ""],
-    ["6", "1025448", "Deepak Kumar Chaudhary", "01-06-00021355", "A, B", "A-309", "B-992", "Tuesday (10-3)", "System Admin", "", ""],
-    ["7", "1025449", "Sunita Sharma Subedi", "01-06-00021356", "B, K", "A-310", "B-993", "Wednesday (10-3)", "System Admin", "", ""],
-    ["8", "1025450", "Manish Raj Gautam", "01-06-00021357", "LTV (B)", "A-311", "B-994", "Thursday (10-3)", "System Admin", "", ""]
+    ["1", "1025443", "Ram Bahadur Shrestha", "01-06-00021350", "LTV (B)", "A-304", "B-987", "Distribution Section", "System Admin", "12/05/2025", "Staff 01"],
+    ["2", "1025444", "Sita Maya Tamang", "01-06-00021351", "Motorcycle (A)", "A-305", "B-988", "Distribution Section", "System Admin", "12/05/2025", "Staff 01"],
+    ["3", "1025445", "Hari Prasad Dahal", "01-06-00021352", "Heavy (C, E)", "A-306", "B-989", "Distribution Section", "System Admin", "", ""],
+    ["4", "1025446", "Anita Kumari Rai", "01-06-00021353", "Scooter (K)", "A-307", "B-990", "Distribution Section", "System Admin", "", ""],
+    ["5", "1025447", "Bikram Thapa", "01-06-00021354", "Car/Jeep (B)", "A-308", "B-991", "License Unit", "System Admin", "", ""],
+    ["6", "1025448", "Deepak Kumar Chaudhary", "01-06-00021355", "A, B", "A-309", "B-992", "License Unit", "System Admin", "", ""],
+    ["7", "1025449", "Sunita Sharma Subedi", "01-06-00021356", "B, K", "A-310", "B-993", "License Unit", "System Admin", "", ""],
+    ["8", "1025450", "Manish Raj Gautam", "01-06-00021357", "LTV (B)", "A-311", "B-994", "License Unit", "System Admin", "", ""]
   ];
 
   let currentY = startY + 9;

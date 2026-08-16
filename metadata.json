@@ -1,5 +1,5 @@
 {
-  "name": "Remix: Printed License Search Management System",
+  "name": "Printed License Search Management System",
   "description": "A secure cloud-based web application to manage, search, track, and distribute printed driving license records in real-time using Firebase Firestore and Auth.",
   "requestFramePermissions": [],
   "majorCapabilities": [
