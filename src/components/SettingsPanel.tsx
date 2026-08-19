@@ -1218,18 +1218,27 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           // 1. Prepare all record objects in memory & check in-file duplicates
           for (const item of validRows) {
             const { rawAppId, rawName, rawLicenseNo, category, oldCode, newCode, rawDept, receivedBy, sn } = item;
-            const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
-            const upperNo = rawLicenseNo.toUpperCase();
+            const rawClean = rawLicenseNo ? String(rawLicenseNo).trim() : '';
+            let sanitizedId = rawClean.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+            if (!sanitizedId && rawAppId) {
+              sanitizedId = String(rawAppId).trim().toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+            }
+            if (!sanitizedId) {
+              sanitizedId = 'LIC_' + (sn || Date.now()) + '_' + Math.random().toString(36).slice(2, 7).toUpperCase();
+            }
+            const upperNo = rawClean.toUpperCase();
 
-            const isDuplicate = fileSeenLicenseNos.has(upperNo) || fileSeenLicenseNos.has(sanitizedId);
-            fileSeenLicenseNos.add(upperNo);
+            const isDuplicate = fileSeenLicenseNos.has(upperNo) || (sanitizedId && fileSeenLicenseNos.has(sanitizedId));
+            if (upperNo) fileSeenLicenseNos.add(upperNo);
             if (sanitizedId) fileSeenLicenseNos.add(sanitizedId);
 
             if (isDuplicate) {
               duplicateCount++;
-            } else {
-              importedCount++;
+              // Do NOT push duplicate to batch write array to prevent multiple writes to same doc
+              continue;
             }
+
+            importedCount++;
 
             const logItem = {
               timestamp: currentTime,
@@ -1248,7 +1257,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
               receivedBy: receivedBy,
               oldCode: oldCode,
               newCode: newCode,
-              isDuplicate: isDuplicate,
+              isDuplicate: false,
               sn: sn,
               status: receivedBy ? 'distributed' : 'available',
               createdAt: currentTime,
@@ -1262,7 +1271,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           }
 
           setUploadProgress(25);
-          setUploadStatusMsg(`Writing records to Firestore in 450-item batches...`);
+          setUploadStatusMsg(`Writing ${allPreparedLicenses.length} unique records to Firestore in 450-item batches...`);
 
           // 2. High-Speed Direct Batch Ingestion into Firestore with bounded concurrency and auto-retry
           const batchResult = await batchWriteLicenses(
@@ -1270,33 +1279,43 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             (completedBatches, totalBatches, writtenCount) => {
               const progressPct = 25 + Math.round((completedBatches / totalBatches) * 70);
               setUploadProgress(Math.min(95, progressPct));
-              setUploadStatusMsg(`Writing batch ${completedBatches} of ${totalBatches} (${writtenCount} / ${allPreparedLicenses.length} records written)...`);
+              setUploadStatusMsg(`Writing batch ${completedBatches} of ${totalBatches} (${writtenCount} / ${allPreparedLicenses.length} records committed)...`);
             }
           );
 
           setUploadProgress(98);
           setUploadStatusMsg('Finalizing upload ledger and status...');
 
-          // Create the ledger entry based on actual Firestore batch results
-          const actualWritten = batchResult.successfulBatchCount * 450;
-          const ledgerStatus = batchResult.failedBatchCount === 0 ? 'Completed' : (batchResult.successfulBatchCount > 0 ? 'Partial' : 'Failed');
+          // Create the ledger entry strictly based on confirmed Firestore batch results
+          const actualCommittedRows = batchResult.committedRows;
+          const isFullSuccess = batchResult.failedBatchCount === 0 && batchResult.totalBatches > 0;
+          const isPartialSuccess = batchResult.successfulBatchCount > 0 && batchResult.failedBatchCount > 0;
+          const ledgerStatus: 'Completed' | 'Partial Success' | 'Failed' = isFullSuccess
+            ? 'Completed'
+            : (isPartialSuccess ? 'Partial Success' : 'Failed');
 
-          const ledgerEntry = {
+          const ledgerEntry: any = {
             id: ledgerId,
             timestamp: timestamp,
             fileName: selectedFile.name,
             size: fileSizeStr,
             actionType: mode === 'overwrite' ? 'Fresh Reload (Overwrote DB)' : (mode === 'append' ? 'Sequential Lot Append' : 'Append Records'),
             noOfLoadedRecords: loadedCount,
-            importedRecords: Math.min(importedCount, actualWritten),
+            importedRecords: actualCommittedRows,
             duplicateRecords: duplicateCount,
             uploader: uploaderEmail,
-            status: ledgerStatus as any
+            status: ledgerStatus,
+            successfulBatchCount: batchResult.successfulBatchCount,
+            failedBatchCount: batchResult.failedBatchCount,
+            totalBatches: batchResult.totalBatches,
+            verificationStatus: batchResult.verificationStatus,
+            batchDetails: batchResult.batchDetails,
+            failedBatchDetails: batchResult.failedBatchDetails
           };
 
           await createUploadLedger(ledgerEntry);
 
-          // Remove active upload checkpoint after successful completion
+          // Remove active upload checkpoint after completion
           try {
             localStorage.removeItem('plsms_active_upload_checkpoint');
           } catch (e) {
@@ -1305,10 +1324,26 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
 
           setUploadProgress(100);
 
-          setConsoleMsg({
-            type: batchResult.failedBatchCount === 0 ? 'success' : 'err',
-            text: `Processed "${selectedFile.name}" in ${mode.toUpperCase()} mode. Total rows: ${loadedCount}, Imported: ${importedCount}, Duplicates: ${duplicateCount}. Batches committed: ${batchResult.successfulBatchCount}/${batchResult.batchDetails.length}.`
-          });
+          if (isFullSuccess) {
+            setConsoleMsg({
+              type: 'success',
+              text: `UPLOAD SUCCESS: Processed "${selectedFile.name}" in ${mode.toUpperCase()} mode. Total rows: ${loadedCount}, Imported: ${actualCommittedRows}, Duplicates: ${duplicateCount}. All ${batchResult.successfulBatchCount}/${batchResult.totalBatches} batches committed successfully.`
+            });
+          } else if (isPartialSuccess) {
+            setConsoleMsg({
+              type: 'err',
+              text: `PARTIAL UPLOAD: Processed "${selectedFile.name}". Total rows: ${loadedCount}, Imported: ${actualCommittedRows}, Failed rows: ${batchResult.failedRows}, Duplicates: ${duplicateCount}. Batches committed: ${batchResult.successfulBatchCount}/${batchResult.totalBatches}. ${batchResult.isQuotaExhausted ? 'Firestore write quota limit reached.' : (batchResult.lastErrorMessage ? `Error: ${batchResult.lastErrorMessage}` : '')}`
+            });
+          } else {
+            setConsoleMsg({
+              type: 'err',
+              text: `UPLOAD FAILED: "${selectedFile.name}" could not be written to Firestore. Total rows: ${loadedCount}, Imported: 0, Duplicates: ${duplicateCount}. Batches committed: 0/${batchResult.totalBatches} (0 records written). ${batchResult.isQuotaExhausted ? 'Firestore write quota temporarily exhausted. Please retry after quota resets.' : (batchResult.lastErrorMessage ? `Error: ${batchResult.lastErrorMessage}` : 'All batch commits failed.')}`
+            });
+          }
+
+          if (batchResult.isQuotaExhausted) {
+            alert(`Firestore write quota temporarily exhausted. ${batchResult.successfulBatchCount} of ${batchResult.totalBatches} batches were committed. No further writes could be saved at this time. Please retry once quota resets.`);
+          }
 
           // Refresh upload history and server KPI counts without full collection download
           await fetchUploadLedgers();
@@ -4054,6 +4089,45 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                         <span className="px-2.5 py-1 rounded-sm text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 inline-block">
                                           Purged / Inactive
                                         </span>
+                                      ) : ledger.status === 'Failed' ? (
+                                        <div className="flex flex-col items-center gap-1">
+                                          <span className="px-2.5 py-1 rounded-md text-[9px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300 inline-block whitespace-nowrap">
+                                            Upload Failed (0 Batches)
+                                          </span>
+                                          {ledger.duplicateRecords > 0 && (
+                                            <span className="text-[9px] font-semibold text-rose-600">
+                                              ({ledger.duplicateRecords} Duplicates detected)
+                                            </span>
+                                          )}
+                                        </div>
+                                      ) : ledger.status === 'Partial' || ledger.status === 'Partial Success' ? (
+                                        <div className="flex flex-col items-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedLotId(ledger.id);
+                                              setLotFilterType('success');
+                                              setLicensePage(1);
+                                            }}
+                                            title="Click to view partially processed records"
+                                            className="px-2.5 py-1 rounded-md text-[9px] font-extrabold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 inline-block whitespace-nowrap cursor-pointer transition-colors active:scale-95 shadow-2xs"
+                                          >
+                                            Partial ({ledger.successfulBatchCount ?? '?'}/{(ledger.successfulBatchCount ?? 0) + (ledger.failedBatchCount ?? 0) || '?'} Batches)
+                                          </button>
+                                          {ledger.duplicateRecords > 0 && (
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenDuplicateComparisonDialog(ledger);
+                                              }}
+                                              title="Click to open Duplicate Comparison Dialog"
+                                              className="text-[9px] font-extrabold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md px-2 py-1 mt-0.5 whitespace-nowrap cursor-pointer transition-all active:scale-95 shadow-2xs"
+                                            >
+                                              ({ledger.duplicateRecords} Duplicates found)
+                                            </button>
+                                          )}
+                                        </div>
                                       ) : (
                                         <div className="flex flex-col items-center gap-1.5">
                                           <button

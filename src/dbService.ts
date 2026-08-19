@@ -40,13 +40,19 @@ import {
 
 export interface BatchWriteResult {
   totalRecords: number;
+  totalBatches: number;
   successfulBatchCount: number;
   failedBatchCount: number;
+  committedRows: number;
+  failedRows: number;
   verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED';
   verificationTime: string;
   verificationDurationMs: number;
   batchDetails: BatchCommitDetail[];
   failedBatchDetails: BatchCommitDetail[];
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
+  isQuotaExhausted?: boolean;
 }
 
 export interface VerificationMetrics {
@@ -1364,8 +1370,11 @@ export async function batchWriteLicenses(
 
     return {
       totalRecords: licenses.length,
+      totalBatches: 1,
       successfulBatchCount: 1,
       failedBatchCount: 0,
+      committedRows: licenses.length,
+      failedRows: 0,
       verificationStatus: 'VERIFIED',
       verificationTime: nowStr,
       verificationDurationMs: endTimeOverall - startTimeOverall,
@@ -1377,23 +1386,43 @@ export async function batchWriteLicenses(
   // FIRESTORE PRODUCTION HIGH-SPEED BATCH WRITE ENGINE
   // BATCH_LIMIT = 450 (Max 450 write operations per Firestore writeBatch)
   const BATCH_LIMIT = 450;
-  const MAX_CONCURRENT_BATCHES = 4; // Bounded concurrency of 4 simultaneous active commits
+  const MAX_CONCURRENT_BATCHES = 3; // Bounded concurrency of 3 simultaneous active commits
   const MAX_BATCH_RETRIES = 3; // Up to 3 retries with exponential backoff
 
+  // 1. Ensure unique document IDs within this upload to prevent Firestore INVALID_ARGUMENT multiple writes in a single batch
+  const uniqueLicenses: License[] = [];
+  const seenIds = new Set<string>();
+  for (const lic of licenses) {
+    if (!lic || !lic.id) continue;
+    if (!seenIds.has(lic.id)) {
+      seenIds.add(lic.id);
+      uniqueLicenses.push(lic);
+    }
+  }
+
   const chunks: License[][] = [];
-  for (let i = 0; i < licenses.length; i += BATCH_LIMIT) {
-    chunks.push(licenses.slice(i, i + BATCH_LIMIT));
+  for (let i = 0; i < uniqueLicenses.length; i += BATCH_LIMIT) {
+    chunks.push(uniqueLicenses.slice(i, i + BATCH_LIMIT));
   }
 
   const totalBatches = chunks.length;
   let completedBatches = 0;
   let nextChunkIdx = 0;
   let writtenRecords = 0;
+  let failedRecords = 0;
+  let isQuotaExhausted = false;
+  let lastGlobalErrorCode = '';
+  let lastGlobalErrorMessage = '';
 
   const { writeBatch } = await import('firebase/firestore');
 
   const processChunk = async (): Promise<void> => {
     while (nextChunkIdx < totalBatches) {
+      if (isQuotaExhausted) {
+        // Quota is already exhausted on this project; do not attempt further commits
+        break;
+      }
+
       const chunkIdx = nextChunkIdx++;
       const slice = chunks[chunkIdx];
       const batchNumber = chunkIdx + 1;
@@ -1401,9 +1430,12 @@ export async function batchWriteLicenses(
       let retries = 0;
       let batchSuccess = false;
       let lastError = '';
+      let lastErrorCode = '';
 
       // First attempt + Retry loop up to MAX_BATCH_RETRIES
       for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
+        if (isQuotaExhausted) break;
+
         if (attempt > 0) {
           retries = attempt;
           // Exponential backoff: 300ms, 600ms, 1200ms
@@ -1414,15 +1446,31 @@ export async function batchWriteLicenses(
           const batch = writeBatch(db);
           slice.forEach((lic) => {
             const targetDocRef = doc(db, 'licenses', lic.id);
-            batch.set(targetDocRef, lic);
+            batch.set(targetDocRef, lic, { merge: true });
           });
           await batch.commit();
           batchSuccess = true;
           break;
         } catch (commitErr: any) {
-          console.warn(`[Batch Write] Batch ${batchNumber}/${totalBatches} (attempt ${attempt + 1}) failed:`, commitErr);
-          lastError = commitErr?.message || String(commitErr);
+          const rawCode = String(commitErr?.code || '');
+          const rawMsg = String(commitErr?.message || commitErr || '');
+          lastErrorCode = rawCode;
+          lastError = rawMsg;
+          lastGlobalErrorCode = rawCode;
+          lastGlobalErrorMessage = rawMsg;
+
+          console.warn(`[Batch Write] Batch ${batchNumber}/${totalBatches} (attempt ${attempt + 1}) failed: [${rawCode}] ${rawMsg}`);
           checkAndTriggerQuotaError(commitErr);
+
+          if (
+            rawCode === 'resource-exhausted' ||
+            rawCode.includes('resource-exhausted') ||
+            rawMsg.toLowerCase().includes('quota') ||
+            rawMsg.toLowerCase().includes('resource-exhausted')
+          ) {
+            isQuotaExhausted = true;
+            break; // Do not retry if project write quota is exhausted
+          }
         }
       }
 
@@ -1434,13 +1482,15 @@ export async function batchWriteLicenses(
         finishTime: batchFinishTime,
         status: batchSuccess ? 'SUCCESS' : 'FAILED',
         retries,
-        ...(batchSuccess ? {} : { error: lastError })
+        ...(batchSuccess ? {} : { error: lastError, errorCode: lastErrorCode })
       };
       batchDetails.push(detail);
 
       completedBatches++;
       if (batchSuccess) {
         writtenRecords += slice.length;
+      } else {
+        failedRecords += slice.length;
       }
 
       // Invoke progress callback
@@ -1465,11 +1515,30 @@ export async function batchWriteLicenses(
   };
 
   const workers: Promise<void>[] = [];
-  for (let w = 0; w < Math.min(MAX_CONCURRENT_BATCHES, totalBatches); w++) {
+  const concurrencyCount = Math.min(MAX_CONCURRENT_BATCHES, totalBatches);
+  for (let w = 0; w < concurrencyCount; w++) {
     workers.push(processChunk());
   }
 
   await Promise.all(workers);
+
+  // If there are unattempted batches due to quota abort
+  while (nextChunkIdx < totalBatches) {
+    const unattemptedChunkIdx = nextChunkIdx++;
+    const slice = chunks[unattemptedChunkIdx];
+    const nowStr = new Date().toISOString();
+    failedRecords += slice.length;
+    batchDetails.push({
+      batchNumber: unattemptedChunkIdx + 1,
+      recordsCount: slice.length,
+      startTime: nowStr,
+      finishTime: nowStr,
+      status: 'FAILED',
+      retries: 0,
+      error: lastGlobalErrorMessage || 'Aborted due to project write quota exhaustion',
+      errorCode: lastGlobalErrorCode || 'resource-exhausted'
+    });
+  }
 
   const endTimeOverall = Date.now();
   const verificationTime = new Date().toISOString();
@@ -1488,7 +1557,7 @@ export async function batchWriteLicenses(
     verificationStatus = 'FAILED';
   }
 
-  console.log(`[Batch Verification] Processed ${licenses.length} records across ${totalBatches} batches (${successfulBatchCount} VERIFIED, ${failedBatchCount} FAILED). Status: ${verificationStatus}`);
+  console.log(`[Batch Verification] Processed ${uniqueLicenses.length} records across ${totalBatches} batches (${successfulBatchCount} VERIFIED, ${failedBatchCount} FAILED, ${writtenRecords} written). Status: ${verificationStatus}`);
 
   if (successfulBatchCount > 0) {
     invalidateDashboardKpiCache();
@@ -1496,14 +1565,20 @@ export async function batchWriteLicenses(
   }
 
   return {
-    totalRecords: licenses.length,
+    totalRecords: uniqueLicenses.length,
+    totalBatches,
     successfulBatchCount,
     failedBatchCount,
+    committedRows: writtenRecords,
+    failedRows: failedRecords,
     verificationStatus,
     verificationTime,
     verificationDurationMs: endTimeOverall - startTimeOverall,
     batchDetails,
-    failedBatchDetails
+    failedBatchDetails,
+    lastErrorCode: lastGlobalErrorCode || undefined,
+    lastErrorMessage: lastGlobalErrorMessage || undefined,
+    isQuotaExhausted
   };
 }
 

@@ -488,14 +488,13 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         cleanLicenses.push(licenseRecord);
       }
 
-      // Execute high-speed direct batch write with bounded concurrency (4) & max batch limit (450)
+      // Execute high-speed direct batch write with bounded concurrency (3) & max batch limit (450)
       const res = await batchWriteLicenses(cleanLicenses, (completedBatches, totalBatches) => {
         setProgress(Math.round((completedBatches / totalBatches) * 100));
       });
 
       allBatchResults.push(res);
-      imported = res.successfulBatchCount * 450;
-      if (imported > cleanLicenses.length) imported = cleanLicenses.length;
+      imported = res.committedRows;
 
       // Create Government Standard Upload History & Version Ledger
       const now = new Date();

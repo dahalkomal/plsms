@@ -98,6 +98,7 @@ export interface BatchCommitDetail {
   status: 'SUCCESS' | 'FAILED';
   retries: number;
   error?: string;
+  errorCode?: string;
 }
 
 export interface UploadHistoryRecord {
