@@ -239,6 +239,9 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   const [activeLicenseFilter, setActiveLicenseFilter] = useState<'all' | 'lots' | 'available' | null>('lots');
   const [selectedLotId, setSelectedLotId] = useState<string | null>(null);
   const [lotFilterType, setLotFilterType] = useState<'all' | 'success' | 'duplicate'>('all');
+  const [recordsCategoryFilter, setRecordsCategoryFilter] = useState<string>('all');
+  const [recordsStatusFilter, setRecordsStatusFilter] = useState<string>('all');
+  const [recordsPageSize, setRecordsPageSize] = useState<number>(25);
   const [deleteLedgerTargetId, setDeleteLedgerTargetId] = useState<string | null>(null);
   const [showLedgerDeleteVerifyModal, setShowLedgerDeleteVerifyModal] = useState(false);
   const [ledgerDeletePassword, setLedgerDeletePassword] = useState('');
@@ -247,6 +250,38 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   const [licenseSearchQuery, setLicenseSearchQuery] = useState('');
   const [licensePage, setLicensePage] = useState(1);
   const [selectedLicenseDetails, setSelectedLicenseDetails] = useState<any | null>(null);
+
+  const handleExportRecordsToExcel = (recordsToExport: any[], fileNamePrefix: string = 'plsms_license_records') => {
+    if (!recordsToExport || recordsToExport.length === 0) {
+      alert("No records to export.");
+      return;
+    }
+    const data = recordsToExport.map((lic, idx) => ({
+      "S.N.": idx + 1,
+      "Applicant ID": lic.applicantId || "",
+      "Full Name": lic.fullName || "",
+      "License Number": lic.licenseNumber || "",
+      "Category": lic.category || "",
+      "Mobile Number": lic.mobileNumber || "",
+      "Status": lic.status || "",
+      "Lot ID": lic.uploadId || "",
+      "Issued Date": lic.issuedDate || "",
+      "Expiry Date": lic.expiryDate || "",
+      "Remarks": lic.remarks || ""
+    }));
+
+    const ws = utils.json_to_sheet(data);
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, "License_Records");
+    const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: "application/octet-stream" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${fileNamePrefix}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
 
   // Duplicate Comparison Dialog State
   const [selectedDuplicateLedger, setSelectedDuplicateLedger] = useState<any | null>(null);
@@ -879,6 +914,12 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
     };
   }, [activeTab]);
 
+  useEffect(() => {
+    if (securityUnlocked) {
+      fetchConsoleLicenses();
+    }
+  }, [securityUnlocked]);
+
   const findDuplicates = (recordsList: any[]) => {
     const counts: { [key: string]: any[] } = {};
     recordsList.forEach(rec => {
@@ -904,8 +945,17 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
     setConsoleLoading(true);
     setConsoleMsg(null);
     try {
-      const kpis = await getDashboardKpiCounts(true);
+      const [kpis, lics, ledgers] = await Promise.all([
+        getDashboardKpiCounts(true),
+        getAllLicenses(50000),
+        getAllUploadLedgers(true)
+      ]);
       setServerKpiCounts(kpis);
+      setAllLicenses(lics || []);
+      setUploadLedgers(ledgers || []);
+      if (lics && lics.length > 0) {
+        findDuplicates(lics);
+      }
     } catch (err: any) {
       setConsoleMsg({ type: 'err', text: err?.message || "Failed to load database ledger records." });
     } finally {
@@ -916,8 +966,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
   const fetchUploadLedgers = async () => {
     setLedgersLoading(true);
     try {
-      const ledgers = await getAllUploadLedgers();
-      setUploadLedgers(ledgers);
+      const ledgers = await getAllUploadLedgers(true);
+      setUploadLedgers(ledgers || []);
     } catch (err: any) {
       console.error("Failed to fetch upload ledgers:", err);
     } finally {
@@ -3700,12 +3750,87 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                   })()}
                 </div>
 
+                {/* VIEW MODE NAVIGATION TABS */}
+                <div className="flex flex-wrap items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveLicenseFilter('lots');
+                      setSelectedLotId(null);
+                      setLicensePage(1);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      activeLicenseFilter === 'lots' && !selectedLotId
+                        ? (isDark ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm' : 'bg-amber-500 text-white shadow-md shadow-amber-500/20')
+                        : (isDark ? 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')
+                    }`}
+                  >
+                    <span>📦</span>
+                    <span>कुल अपलोड लटहरू (UPLOAD LOTS)</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                      activeLicenseFilter === 'lots' && !selectedLotId
+                        ? (isDark ? 'bg-amber-500/30 text-amber-200' : 'bg-white/20 text-white')
+                        : (isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700')
+                    }`}>
+                      {uploadLedgers.filter(l => l.status !== 'Deleted').length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveLicenseFilter('all');
+                      setSelectedLotId(null);
+                      setLicensePage(1);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      activeLicenseFilter === 'all'
+                        ? (isDark ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 shadow-sm' : 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20')
+                        : (isDark ? 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')
+                    }`}
+                  >
+                    <span>📋</span>
+                    <span>सम्पूर्ण भण्डारण गरिएका रेकर्डहरू (ALL STORED RECORDS)</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                      activeLicenseFilter === 'all'
+                        ? (isDark ? 'bg-indigo-500/30 text-indigo-200' : 'bg-white/20 text-white')
+                        : (isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700')
+                    }`}>
+                      {allLicenses.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveLicenseFilter('available');
+                      setSelectedLotId(null);
+                      setLicensePage(1);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      activeLicenseFilter === 'available'
+                        ? (isDark ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 shadow-sm' : 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20')
+                        : (isDark ? 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')
+                    }`}
+                  >
+                    <span>✓</span>
+                    <span>कार्यालयमा उपलब्ध कार्डहरू (AVAILABLE CARDS)</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                      activeLicenseFilter === 'available'
+                        ? (isDark ? 'bg-emerald-500/30 text-emerald-200' : 'bg-white/20 text-white')
+                        : (isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700')
+                    }`}>
+                      {allLicenses.filter(l => l.status === 'available' || l.status === 'found').length}
+                    </span>
+                  </button>
+                </div>
+
                 {/* ACTIVE FILTER LICENSE RECORDS VIEWER */}
                 {activeLicenseFilter && activeLicenseFilter !== 'lots' && (
                   <div className={`border rounded-2xl p-5 space-y-4 transition-all animate-in fade-in slide-in-from-top-4 duration-300 ${
                     isDark ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
                   }`}>
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-3 border-slate-800/40">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b pb-3 border-slate-800/40">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
@@ -3713,38 +3838,59 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                               ? 'bg-indigo-950/40 text-indigo-400 border border-indigo-900/40'
                               : 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/40'
                           }`}>
-                            ACTIVE FILTER VIEW
+                            ACTIVE TABLE VIEW
                           </span>
                           <button 
                             type="button"
-                            onClick={() => setActiveLicenseFilter(null)}
-                            className="text-slate-400 hover:text-rose-400 transition-colors text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                            onClick={() => setActiveLicenseFilter('lots')}
+                            className="text-slate-400 hover:text-amber-400 transition-colors text-xs font-semibold flex items-center gap-1 cursor-pointer"
                           >
-                            <X className="w-3.5 h-3.5" /> Clear Filter (दृश्य बन्द गर्नुहोस्)
+                            <span>📦</span> लट इतिहासमा फर्कनुहोस् (Switch to Lots)
                           </button>
                         </div>
                         <h4 className={`text-sm font-black uppercase tracking-wider mt-1 flex items-center gap-2 ${
                           activeLicenseFilter === 'all'
                             ? 'text-indigo-400'
-                            : 'text-emerald-505 text-emerald-500'
+                            : 'text-emerald-500'
                         }`}>
                           <span>📂</span>
-                          {activeLicenseFilter === 'all' && 'डेटाबेस जम्मा रेकर्डहरू (ALL DATABASE RECORDS)'}
-                          {activeLicenseFilter === 'available' && 'कार्यालयमा उपलब्ध कार्डहरू (AVAILABLE CARDS)'}
+                          {activeLicenseFilter === 'all' && 'डेटाबेस जम्मा रेकर्डहरू (ALL DATABASE STORED RECORDS)'}
+                          {activeLicenseFilter === 'available' && 'कार्यालयमा उपलब्ध कार्डहरू (AVAILABLE CARDS IN OFFICE)'}
                         </h4>
                         <p className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                           {activeLicenseFilter === 'all' 
-                            ? 'डेटाबेसमा भण्डार गरिएका सवारी चालक अनुमति पत्रका सम्पूर्ण रेकर्डहरूको सूची।' 
-                            : 'कार्यालयमा सुरक्षित रूपमा वितरणको लागि उपलब्ध रहेका स्मार्ट कार्ड रेकर्डहरूको सूची।'}
+                            ? `प्रणालीमा हाल कुल ${allLicenses.length} सवारी चालक अनुमति पत्रका रेकर्डहरू सुरक्षित रूपमा भण्डार गरिएका छन्।` 
+                            : `कार्यालयमा हाल कुल ${allLicenses.filter(l => l.status === 'available' || l.status === 'found').length} स्मार्ट कार्डहरू वितरणको लागि उपलब्ध छन्।`}
                         </p>
                       </div>
 
-                      {/* Search & Actions */}
-                      <div className="flex items-center gap-2.5 shrink-0">
+                      {/* Search, Filter & Export Actions */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {/* Status Filter */}
+                        <select
+                          value={recordsStatusFilter}
+                          onChange={(e) => {
+                            setRecordsStatusFilter(e.target.value);
+                            setLicensePage(1);
+                          }}
+                          className={`py-1.5 px-3 text-xs rounded-lg border outline-hidden transition-all ${
+                            isDark
+                              ? 'bg-slate-900 border-slate-800 text-slate-200'
+                              : 'bg-slate-50 border-slate-250 text-slate-800'
+                          }`}
+                        >
+                          <option value="all">सबै स्थिति (All Status)</option>
+                          <option value="available">उपलब्ध (Available)</option>
+                          <option value="distributed">वितरित (Distributed)</option>
+                          <option value="missing">छुटेको/हराएको (Missing)</option>
+                          <option value="found">भेटिएको (Found)</option>
+                        </select>
+
+                        {/* Search Input */}
                         <div className="relative">
                           <input
                             type="text"
-                            placeholder="Search records list..."
+                            placeholder="नाम, लाइसेन्स नं, ID खोज्नुहोस्..."
                             value={licenseSearchQuery}
                             onChange={(e) => {
                               setLicenseSearchQuery(e.target.value);
@@ -3752,8 +3898,8 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                             }}
                             className={`pl-3 pr-8 py-1.5 text-xs rounded-lg border outline-hidden transition-all ${
                               isDark 
-                                ? 'bg-slate-900 border-slate-800 text-white placeholder-slate-500 focus:border-indigo-500 w-[200px]' 
-                                : 'bg-slate-50 border-slate-250 text-slate-800 placeholder-slate-400 focus:border-indigo-600 w-[200px]'
+                                ? 'bg-slate-900 border-slate-800 text-white placeholder-slate-500 focus:border-indigo-500 w-[210px]' 
+                                : 'bg-slate-50 border-slate-250 text-slate-800 placeholder-slate-400 focus:border-indigo-600 w-[210px]'
                             }`}
                           />
                           {licenseSearchQuery && (
@@ -3769,18 +3915,68 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                             </button>
                           )}
                         </div>
+
+                        {/* Refresh Button */}
+                        <button
+                          type="button"
+                          onClick={fetchConsoleLicenses}
+                          title="Reload records from Firestore"
+                          className={`p-2 rounded-lg border transition-all active:scale-95 cursor-pointer ${
+                            isDark 
+                              ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300' 
+                              : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600'
+                          }`}
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${consoleLoading ? 'animate-spin' : ''}`} />
+                        </button>
+
+                        {/* Export to Excel */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const filtered = allLicenses.filter(lic => {
+                              if (activeLicenseFilter === 'available' && lic.status !== 'available' && lic.status !== 'found') return false;
+                              if (recordsStatusFilter !== 'all' && lic.status !== recordsStatusFilter) return false;
+                              if (!licenseSearchQuery) return true;
+                              const q = licenseSearchQuery.toLowerCase().trim();
+                              return (
+                                (lic.fullName || '').toLowerCase().includes(q) ||
+                                (lic.licenseNumber || '').toLowerCase().includes(q) ||
+                                (lic.applicantId || '').toLowerCase().includes(q) ||
+                                (lic.mobileNumber || '').toLowerCase().includes(q) ||
+                                (lic.category || '').toLowerCase().includes(q) ||
+                                (lic.remarks || '').toLowerCase().includes(q) ||
+                                (lic.uploadId || '').toLowerCase().includes(q)
+                              );
+                            });
+                            handleExportRecordsToExcel(filtered, `plsms_stored_records_${activeLicenseFilter}`);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
+                            isDark
+                              ? 'bg-emerald-950/40 hover:bg-emerald-900/60 border-emerald-800/60 text-emerald-300'
+                              : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700 shadow-xs'
+                          }`}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Export Excel</span>
+                        </button>
                       </div>
                     </div>
 
                     {/* Table Render */}
                     {(() => {
                       const filtered = allLicenses.filter(lic => {
-                        // 1. Status Filter
+                        // 1. View Filter
                         if (activeLicenseFilter === 'available') {
                           if (lic.status !== 'available' && lic.status !== 'found') return false;
                         }
                         
-                        // 2. Search Query Filter
+                        // 2. Status Dropdown Filter
+                        if (recordsStatusFilter !== 'all') {
+                          if (lic.status !== recordsStatusFilter) return false;
+                        }
+
+                        // 3. Search Query Filter
                         if (!licenseSearchQuery) return true;
                         const q = licenseSearchQuery.toLowerCase().trim();
                         return (
@@ -3789,12 +3985,13 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                           (lic.applicantId || '').toLowerCase().includes(q) ||
                           (lic.mobileNumber || '').toLowerCase().includes(q) ||
                           (lic.category || '').toLowerCase().includes(q) ||
-                          (lic.remarks || '').toLowerCase().includes(q)
+                          (lic.remarks || '').toLowerCase().includes(q) ||
+                          (lic.uploadId || '').toLowerCase().includes(q)
                         );
                       });
 
                       const totalCount = filtered.length;
-                      const LICENSE_PAGE_SIZE = 10;
+                      const LICENSE_PAGE_SIZE = recordsPageSize;
                       const totalPages = Math.ceil(totalCount / LICENSE_PAGE_SIZE) || 1;
                       const paginated = filtered.slice(
                         (licensePage - 1) * LICENSE_PAGE_SIZE,
@@ -3804,7 +4001,9 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                       if (totalCount === 0) {
                         return (
                           <div className="py-12 text-center text-xs text-slate-500 italic">
-                            No records found matching "{licenseSearchQuery}" under this category.
+                            {licenseSearchQuery 
+                              ? `No records found matching "${licenseSearchQuery}".` 
+                              : 'No stored license records found in the database.'}
                           </div>
                         );
                       }
@@ -3825,6 +4024,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                   <th className="py-2.5 px-3">LICENSE NO (लाइसेन्स नं)</th>
                                   <th className="py-2.5 px-3">CATEGORY (वर्ग)</th>
                                   <th className="py-2.5 px-3 text-center">MOBILE</th>
+                                  <th className="py-2.5 px-3 text-center">LOT / SOURCE</th>
                                   <th className="py-2.5 px-3 text-center">STATUS (स्थिति)</th>
                                   <th className="py-2.5 px-3 text-right">ACTIONS (कार्यहरू)</th>
                                 </tr>
@@ -3835,7 +4035,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                   return (
                                     <tr 
                                       key={lic.id} 
-                                      className={`transition-colors hover:bg-slate-905/10 dark:hover:bg-slate-900/40`}
+                                      className={`transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-900/40`}
                                     >
                                       <td className="py-2.5 px-3 font-mono text-[10px] text-slate-500">{realSn}</td>
                                       <td className="py-2.5 px-3 font-mono font-bold text-cyan-500 text-[10px]">{lic.applicantId}</td>
@@ -3850,6 +4050,11 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                       </td>
                                       <td className="py-2.5 px-3 text-center font-mono text-slate-500">{lic.mobileNumber || '—'}</td>
                                       <td className="py-2.5 px-3 text-center">
+                                        <span className="px-2 py-0.5 rounded-sm text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/30 whitespace-nowrap">
+                                          {lic.uploadId ? lic.uploadId.slice(0, 12) : 'SYSTEM MASTER'}
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-center">
                                         <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wide inline-block ${
                                           lic.status === 'distributed'
                                             ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/30'
@@ -3859,7 +4064,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                                 ? 'bg-sky-950/40 text-sky-400 border border-sky-900/30'
                                                 : 'bg-amber-955/20 text-amber-500 border border-amber-900/30'
                                         }`}>
-                                          {lic.status === 'distributed' ? '✓ DISTRIBUTED' : lic.status === 'missing' ? '✗ MISSING' : lic.status === 'found' ? '✓ FOUND' : '● PENDING'}
+                                          {lic.status === 'distributed' ? '✓ DISTRIBUTED' : lic.status === 'missing' ? '✗ MISSING' : lic.status === 'found' ? '✓ FOUND' : '● AVAILABLE'}
                                         </span>
                                       </td>
                                       <td className="py-2.5 px-3 text-right">
@@ -3897,13 +4102,33 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                             </table>
                           </div>
 
-                          {/* Pagination Controls */}
-                          <div className="flex items-center justify-between text-xs pt-2">
-                            <span className="text-slate-500 font-medium">
-                              Showing <strong className="text-slate-400">{(licensePage - 1) * LICENSE_PAGE_SIZE + 1}</strong> to{' '}
-                              <strong className="text-slate-400">{Math.min(licensePage * LICENSE_PAGE_SIZE, totalCount)}</strong> of{' '}
-                              <strong className="text-slate-400">{totalCount}</strong> records
-                            </span>
+                          {/* Pagination Controls & Rows Per Page */}
+                          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs pt-2">
+                            <div className="flex items-center gap-3">
+                              <span className="text-slate-500 font-medium">
+                                Showing <strong className="text-slate-400">{(licensePage - 1) * LICENSE_PAGE_SIZE + 1}</strong> to{' '}
+                                <strong className="text-slate-400">{Math.min(licensePage * LICENSE_PAGE_SIZE, totalCount)}</strong> of{' '}
+                                <strong className="text-slate-400">{totalCount}</strong> records
+                              </span>
+                              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                <span>Rows:</span>
+                                <select
+                                  value={recordsPageSize}
+                                  onChange={(e) => {
+                                    setRecordsPageSize(Number(e.target.value));
+                                    setLicensePage(1);
+                                  }}
+                                  className={`py-0.5 px-2 rounded border ${
+                                    isDark ? 'bg-slate-900 border-slate-800 text-slate-200' : 'bg-slate-50 border-slate-250 text-slate-700'
+                                  }`}
+                                >
+                                  <option value={10}>10</option>
+                                  <option value={25}>25</option>
+                                  <option value={50}>50</option>
+                                  <option value={100}>100</option>
+                                </select>
+                              </div>
+                            </div>
                             <div className="flex items-center gap-1">
                               <button
                                 type="button"
@@ -3982,6 +4207,23 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                         </div>
                         <button
                           type="button"
+                          onClick={() => {
+                            setActiveLicenseFilter('all');
+                            setSelectedLotId(null);
+                            setLicensePage(1);
+                          }}
+                          title="View all individual driving license records stored in system"
+                          className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
+                            isDark 
+                              ? 'bg-indigo-950/40 hover:bg-indigo-900/60 border-indigo-800/60 text-indigo-300' 
+                              : 'bg-indigo-50 hover:bg-indigo-100 border-indigo-200 text-indigo-700 shadow-xs'
+                          }`}
+                        >
+                          <span>📋</span>
+                          <span>सबै रेकर्डहरू ({allLicenses.length})</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={fetchConsoleLicenses}
                           title="Reload history data"
                           className={`p-2 rounded-lg border transition-all active:scale-95 cursor-pointer ${
@@ -3990,7 +4232,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                               : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600'
                           }`}
                         >
-                          <RefreshCw className="w-3.5 h-3.5" />
+                          <RefreshCw className={`w-3.5 h-3.5 ${consoleLoading || ledgersLoading ? 'animate-spin' : ''}`} />
                         </button>
                       </div>
                     </div>
@@ -4000,9 +4242,89 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                         <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
                         <span>Loading upload history ledger worksheet...</span>
                       </div>
-                    ) : uploadLedgers.length === 0 ? (
+                    ) : uploadLedgers.length === 0 && allLicenses.length === 0 ? (
                       <div className="py-12 text-center text-xs text-slate-500">
-                        No upload ledgers recorded. Use the lot uploader below to import new lot files.
+                        No upload ledgers or stored records recorded. Use the lot uploader below to import new lot files.
+                      </div>
+                    ) : uploadLedgers.length === 0 && allLicenses.length > 0 ? (
+                      <div className="space-y-3">
+                        <div className="overflow-x-auto rounded-xl border border-slate-800/30">
+                          <table className="w-full text-left text-xs border-collapse font-sans">
+                            <thead>
+                              <tr className={`border-b text-[10px] uppercase tracking-wider font-extrabold ${
+                                isDark 
+                                  ? 'bg-slate-900 border-slate-850 text-amber-400' 
+                                  : 'bg-[#FEF5D4] border-amber-200 text-[#7A5B01]'
+                              }`}>
+                                <th className="py-3 px-3 text-center">S.N. (क्र.सं.)</th>
+                                <th className="py-3 px-3">UPLOADED FILE NAME</th>
+                                <th className="py-3 px-3 text-center">LOT (लट)</th>
+                                <th className="py-3 px-3 text-center">DATE (AD/BS)</th>
+                                <th className="py-3 px-3 text-center text-[#2980B9]">PREV RECORDS</th>
+                                <th className="py-3 px-3 text-center text-[#27AE60]">RECENT RECORDS</th>
+                                <th className="py-3 px-3 text-center text-[#C0392B]">DUPLICATE FOUND</th>
+                                <th className="py-3 px-3 text-center text-[#1B4F72]">TOTAL RECORDS</th>
+                                <th className="py-3 px-3 text-center">STATUS</th>
+                                <th className="py-3 px-3 text-right">ACTIONS</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/20">
+                              <tr className="transition-colors duration-150 border-b hover:bg-slate-50/50 dark:hover:bg-slate-900/40">
+                                <td className="py-3 px-3 font-mono text-[11px] font-bold text-center text-slate-500">1</td>
+                                <td className="py-3 px-3 font-semibold text-slate-800 dark:text-slate-200">
+                                  System Master Database Records (प्रणालीमा सुरक्षित मुख्य रेकर्डहरू)
+                                </td>
+                                <td className="py-3 px-3 text-center">
+                                  <span className="px-2 py-0.5 rounded-sm text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800 whitespace-nowrap">
+                                    MASTER-DB
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 text-center font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                                  २०८३/०४/०३
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold font-mono text-[#2980B9] text-xs">
+                                  0
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold font-mono text-[#27AE60] text-xs">
+                                  {allLicenses.length}
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold font-mono text-slate-400 text-xs">
+                                  0
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold font-mono text-[#1B4F72] text-xs">
+                                  {allLicenses.length}
+                                </td>
+                                <td className="py-3 px-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveLicenseFilter('all');
+                                      setSelectedLotId(null);
+                                      setLicensePage(1);
+                                    }}
+                                    className="px-2.5 py-1 rounded-md text-[9px] font-extrabold bg-[#E8F8F5] hover:bg-[#D1F2EB] text-[#117A65] border border-[#A3E4D7] inline-block whitespace-nowrap cursor-pointer transition-colors active:scale-95 shadow-2xs"
+                                  >
+                                    Active Database Stored ({allLicenses.length} records)
+                                  </button>
+                                </td>
+                                <td className="py-3 px-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveLicenseFilter('all');
+                                      setSelectedLotId(null);
+                                      setLicensePage(1);
+                                    }}
+                                    className="p-1.5 rounded-lg border text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800 transition-all cursor-pointer"
+                                    title="View all records"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     ) : (
                       <div className="overflow-x-auto rounded-xl border border-slate-800/30">
