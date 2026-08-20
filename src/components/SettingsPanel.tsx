@@ -4463,11 +4463,23 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
                                         <span className="px-2.5 py-1 rounded-sm text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 inline-block">
                                           Purged / Inactive
                                         </span>
+                                      ) : ledger.status === 'Processing' ? (
+                                        <div className="flex flex-col items-center gap-1">
+                                          <span className="px-2.5 py-1 rounded-md text-[9px] font-extrabold bg-sky-100 text-sky-800 border border-sky-300 inline-flex items-center gap-1 whitespace-nowrap">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-ping"></span>
+                                            Processing ({ledger.committedBatches ?? ledger.successfulBatchCount ?? 0}/{ledger.expectedBatches ?? ledger.totalBatches ?? '?'} Batches)
+                                          </span>
+                                        </div>
                                       ) : ledger.status === 'Failed' ? (
                                         <div className="flex flex-col items-center gap-1">
-                                          <span className="px-2.5 py-1 rounded-md text-[9px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300 inline-block whitespace-nowrap">
-                                            Upload Failed (0 Batches)
+                                          <span className="px-2.5 py-1 rounded-md text-[9px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300 inline-block whitespace-nowrap" title={ledger.errorMessage || 'Batch write failed'}>
+                                            Upload Failed ({ledger.committedBatches ?? ledger.successfulBatchCount ?? 0} Batches)
                                           </span>
+                                          {ledger.errorMessage && (
+                                            <span className="text-[8px] font-semibold text-rose-600 max-w-[140px] truncate" title={ledger.errorMessage}>
+                                              {ledger.errorMessage}
+                                            </span>
+                                          )}
                                           {ledger.duplicateRecords > 0 && (
                                             <span className="text-[9px] font-semibold text-rose-600">
                                               ({ledger.duplicateRecords} Duplicates detected)

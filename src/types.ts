@@ -69,25 +69,37 @@ export interface UploadLedger {
   importedRecords: number;
   duplicateRecords: number;
   uploader: string;
-  status: 'Completed' | 'Restored' | 'Deleted' | 'Verified' | 'Partial Success' | 'Failed';
+  status: 'Completed' | 'Restored' | 'Deleted' | 'Verified' | 'Partial Success' | 'Partial' | 'Failed' | 'Uploading' | 'Processing';
   versionNumber?: number;
   isActive?: boolean;
   uploadDate?: string;
   uploadTime?: string;
   fileUrl?: string;
   totalExcelRows?: number;
+  totalRows?: number;
   validRows?: number;
   skippedRows?: number;
+  invalidRows?: number;
   duplicateRows?: number;
   expectedWrites?: number;
+  expectedBatches?: number;
+  totalBatches?: number;
   successfulBatchCount?: number;
+  committedBatches?: number;
   failedBatchCount?: number;
+  failedBatches?: number;
+  committedRows?: number;
+  failedRows?: number;
   verificationStatus?: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' | 'PENDING';
   verificationTime?: string;
   verificationDurationMs?: number;
   batchDetails?: BatchCommitDetail[];
   failedBatchDetails?: BatchCommitDetail[];
   missingRecordsCount?: number;
+  startedAt?: string;
+  completedAt?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
 }
 
 export interface BatchCommitDetail {

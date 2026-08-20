@@ -1277,8 +1277,9 @@ export async function createOrUpdateLicense(id: string, license: License): Promi
 
   // 1. Write directly to persistent Cloud Firestore
   try {
+    const cleanDoc = sanitizeFirestoreData(updatedLicense);
     const docRef = doc(db, 'licenses', id);
-    await setDoc(docRef, updatedLicense);
+    await setDoc(docRef, cleanDoc);
     invalidateDashboardKpiCache();
     invalidateAlphabeticalSummaryCache();
   } catch (error) {
@@ -1336,12 +1337,33 @@ export async function deleteLicense(id: string): Promise<void> {
   }
 }
 
+export function sanitizeFirestoreData<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeFirestoreData(item)) as unknown as T;
+  }
+  if (typeof data === 'object' && !(data instanceof Date)) {
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        cleaned[key] = sanitizeFirestoreData(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+}
+
 export async function batchWriteLicenses(
   licenses: License[],
-  onProgress?: (completedBatches: number, totalBatches: number, writtenCount: number) => void
+  onProgress?: (completedBatches: number, totalBatches: number, writtenCount: number) => void,
+  options?: { ledgerId?: string }
 ): Promise<BatchWriteResult> {
   const startTimeOverall = Date.now();
   const batchDetails: BatchCommitDetail[] = [];
+  const ledgerId = options?.ledgerId;
 
   if (isDemoModeActive()) {
     const list = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
@@ -1367,6 +1389,23 @@ export async function batchWriteLicenses(
     };
 
     if (onProgress) onProgress(1, 1, licenses.length);
+
+    if (ledgerId) {
+      updateUploadLedger(ledgerId, {
+        status: 'Completed',
+        verificationStatus: 'VERIFIED',
+        completedAt: nowStr,
+        successfulBatchCount: 1,
+        committedBatches: 1,
+        failedBatchCount: 0,
+        failedBatches: 0,
+        importedRecords: licenses.length,
+        committedRows: licenses.length,
+        failedRows: 0,
+        batchDetails: [demoDetail],
+        failedBatchDetails: []
+      }).catch(e => console.warn("Notice updating demo ledger:", e));
+    }
 
     return {
       totalRecords: licenses.length,
@@ -1466,9 +1505,10 @@ export async function batchWriteLicenses(
         try {
           const batch = writeBatch(db);
           slice.forEach((lic) => {
+            const cleanLic = sanitizeFirestoreData(lic);
             const targetDocRef = doc(db, 'licenses', lic.id);
             // Upsert with merge: true (ON CONFLICT DO UPDATE/MERGE) to safely preserve valid data
-            batch.set(targetDocRef, lic, { merge: true });
+            batch.set(targetDocRef, cleanLic, { merge: true });
           });
           await batch.commit();
           batchSuccess = true;
@@ -1504,8 +1544,9 @@ export async function batchWriteLicenses(
         let itemFailCount = 0;
         for (const lic of slice) {
           try {
+            const cleanLic = sanitizeFirestoreData(lic);
             const targetDocRef = doc(db, 'licenses', lic.id);
-            await firestoreSetDoc(targetDocRef, lic, { merge: true });
+            await firestoreSetDoc(targetDocRef, cleanLic, { merge: true });
             itemSuccessCount++;
           } catch (itemErr: any) {
             itemFailCount++;
@@ -1544,7 +1585,7 @@ export async function batchWriteLicenses(
         onProgress(completedBatches, totalBatches, writtenRecords);
       }
 
-      // Periodic upload checkpoint saved every 5 completed batches
+      // Periodic upload checkpoint and ledger progress update
       if (completedBatches % 5 === 0 || completedBatches === totalBatches) {
         try {
           localStorage.setItem('plsms_active_upload_checkpoint', JSON.stringify({
@@ -1555,6 +1596,20 @@ export async function batchWriteLicenses(
           }));
         } catch (chkErr) {
           console.warn("Checkpoint save notice:", chkErr);
+        }
+
+        if (ledgerId) {
+          const succCount = batchDetails.filter(b => b.status === 'SUCCESS').length;
+          const failCount = batchDetails.filter(b => b.status === 'FAILED').length;
+          updateUploadLedger(ledgerId, {
+            successfulBatchCount: succCount,
+            committedBatches: succCount,
+            failedBatchCount: failCount,
+            failedBatches: failCount,
+            importedRecords: writtenRecords,
+            committedRows: writtenRecords,
+            failedRows: failedRecords
+          }).catch(e => console.warn("Notice: Throttled ledger progress update:", e));
         }
       }
     }
@@ -1597,10 +1652,16 @@ export async function batchWriteLicenses(
   const failedBatchCount = failedBatchDetails.length;
 
   let verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' = 'VERIFIED';
+  let finalLedgerStatus: 'Completed' | 'Partial Success' | 'Failed' = 'Completed';
   if (failedBatchCount > 0 && successfulBatchCount > 0) {
     verificationStatus = 'PARTIAL SUCCESS';
+    finalLedgerStatus = 'Partial Success';
   } else if (failedBatchCount > 0 && successfulBatchCount === 0) {
     verificationStatus = 'FAILED';
+    finalLedgerStatus = 'Failed';
+  } else if (successfulBatchCount === totalBatches && failedBatchCount === 0) {
+    verificationStatus = 'VERIFIED';
+    finalLedgerStatus = 'Completed';
   }
 
   console.log(`[Batch Verification] Processed ${uniqueLicenses.length} records across ${totalBatches} batches (${successfulBatchCount} VERIFIED, ${failedBatchCount} FAILED, ${writtenRecords} written). Status: ${verificationStatus}`);
@@ -1608,6 +1669,29 @@ export async function batchWriteLicenses(
   if (successfulBatchCount > 0) {
     invalidateDashboardKpiCache();
     invalidateAlphabeticalSummaryCache();
+  }
+
+  if (ledgerId) {
+    try {
+      await updateUploadLedger(ledgerId, {
+        status: finalLedgerStatus,
+        verificationStatus,
+        completedAt: verificationTime,
+        successfulBatchCount,
+        committedBatches: successfulBatchCount,
+        failedBatchCount,
+        failedBatches: failedBatchCount,
+        importedRecords: writtenRecords,
+        committedRows: writtenRecords,
+        failedRows: failedRecords,
+        errorCode: lastGlobalErrorCode || null,
+        errorMessage: lastGlobalErrorMessage || (isQuotaExhausted ? 'Firestore write quota exceeded' : null),
+        batchDetails,
+        failedBatchDetails
+      });
+    } catch (finalLedgerErr) {
+      console.warn("Notice updating final ledger stats:", finalLedgerErr);
+    }
   }
 
   return {
@@ -2672,9 +2756,7 @@ export async function createUploadLedger(ledger: UploadLedger): Promise<void> {
     isActive: ledger.isActive ?? true
   };
 
-  const cleanEnriched = Object.fromEntries(
-    Object.entries(enriched).filter(([_, v]) => v !== undefined)
-  ) as UploadLedger;
+  const cleanEnriched = sanitizeFirestoreData(enriched) as UploadLedger;
 
   // 1. Update local storage & cache for immediate availability
   if (typeof window !== 'undefined') {
@@ -2710,6 +2792,35 @@ export async function createUploadLedger(ledger: UploadLedger): Promise<void> {
   } catch (error: any) {
     console.error(`Failed to create upload ledger ${ledger.id}:`, error);
     throw new Error(`Failed to save upload ledger: ${error?.message || 'Firestore write error'}`);
+  }
+}
+
+export async function updateUploadLedger(id: string, updates: Partial<UploadLedger>): Promise<void> {
+  const cleanUpdates = sanitizeFirestoreData(updates);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const list = fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
+      const idx = list.findIndex(l => l.id === id);
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...cleanUpdates };
+        writeStorageItem('plsms_mock_ledgers', list);
+      }
+    } catch (e) {}
+  }
+  if (cachedUploadLedgers) {
+    const idx = cachedUploadLedgers.findIndex(l => l.id === id);
+    if (idx >= 0) {
+      cachedUploadLedgers[idx] = { ...cachedUploadLedgers[idx], ...cleanUpdates };
+    }
+  }
+  if (isDemoModeActive()) {
+    return;
+  }
+  try {
+    await withFirestoreRetry(() => setDoc(doc(db, 'upload_ledgers', id), cleanUpdates, { merge: true }));
+  } catch (error) {
+    console.warn(`Notice: Could not update upload ledger ${id}:`, error);
   }
 }
 

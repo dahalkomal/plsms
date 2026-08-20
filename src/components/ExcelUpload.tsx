@@ -3,7 +3,7 @@ import { read, utils, write } from 'xlsx';
 import { write as writeStyle, utils as utilsStyle } from 'xlsx-js-style';
 import { auth, db } from '../firebase';
 import { writeBatch, doc } from 'firebase/firestore';
-import { getLicenseById, createOrUpdateLicense, getOfficeSettings, batchWriteLicenses, isDemoModeActive, createUploadLedger, archiveExcelToStorage, BatchWriteResult, VerificationMetrics } from '../dbService';
+import { getLicenseById, createOrUpdateLicense, getOfficeSettings, batchWriteLicenses, isDemoModeActive, createUploadLedger, updateUploadLedger, archiveExcelToStorage, BatchWriteResult, VerificationMetrics } from '../dbService';
 import { License, LicenseStatus, UploadLedger, BatchCommitDetail } from '../types';
 import { registryDataStore } from '../registryDataStore';
 import { downloadPdfSampleTemplate } from '../utils/pdfTemplateGenerator';
@@ -481,17 +481,17 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
 
         const licenseRecord: License = {
           id: sanitizedId,
-          applicantId: rawAppId,
-          fullName: rawName,
-          licenseNumber: rawLicenseNo,
+          applicantId: rawAppId || '',
+          fullName: rawName || '',
+          licenseNumber: rawLicenseNo || '',
           category: category || 'LTV',
-          department: rawDept || undefined,
-          oldCode,
-          newCode,
-          sn,
-          receivedBy,
-          distributedDate: distributedDate || undefined,
-          distributedByStaffName: distributedBy || undefined,
+          department: rawDept || '',
+          oldCode: oldCode || '',
+          newCode: newCode || '',
+          sn: typeof sn === 'number' && !isNaN(sn) ? sn : (rowIdx + 1),
+          receivedBy: receivedBy || '',
+          distributedDate: distributedDate || '',
+          distributedByStaffName: distributedBy || '',
           status: finalStatus,
           createdAt: currentTime,
           updatedAt: currentTime,
@@ -502,18 +502,73 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         cleanLicenses.push(licenseRecord);
       }
 
-      // Execute high-speed direct batch write with bounded concurrency (3) & max batch limit (450)
-      const res = await batchWriteLicenses(cleanLicenses, (completedBatches, totalBatches) => {
-        setProgress(Math.round((completedBatches / totalBatches) * 100));
+      // 1. Generate unique Lot Ledger ID and tag all records
+      const ledgerId = `LOT_${now.getFullYear()}_${Date.now().toString().slice(-6)}`;
+      cleanLicenses.forEach(lic => {
+        lic.uploadId = ledgerId;
       });
+
+      const expectedBatches = Math.max(1, Math.ceil(cleanLicenses.length / 450));
+      const fileSizeStr = file ? `${(file.size / 1024).toFixed(1)} KB` : 'N/A';
+
+      // 2. CREATE INITIAL UPLOAD LEDGER RECORD IN FIRESTORE BEFORE WRITING ANY RECORDS
+      const initialLedger: UploadLedger = {
+        id: ledgerId,
+        timestamp: now.toISOString(),
+        startedAt: now.toISOString(),
+        completedAt: null,
+        fileName: file?.name || 'excel_upload.xlsx',
+        size: fileSizeStr,
+        actionType: totalRecords > 1000 ? 'Direct High-Speed Batch Import' : 'Safe Checked Import',
+        noOfLoadedRecords: totalRecords,
+        totalRows: totalRecords,
+        totalExcelRows: totalRecords,
+        validRows: totalClean,
+        invalidRows: skipped,
+        skippedRows: skipped,
+        duplicateRows: skipped,
+        duplicateRecords: skipped,
+        importedRecords: 0,
+        committedRows: 0,
+        failedRows: 0,
+        expectedWrites: cleanLicenses.length,
+        expectedBatches: expectedBatches,
+        totalBatches: expectedBatches,
+        successfulBatchCount: 0,
+        committedBatches: 0,
+        failedBatchCount: 0,
+        failedBatches: 0,
+        uploader: staffEmail || 'Super Admin',
+        status: 'Processing',
+        verificationStatus: 'PENDING',
+        fileUrl: archivedFileUrl || undefined,
+        isActive: true,
+        errorCode: null,
+        errorMessage: null
+      };
+
+      let ledgerFailed = false;
+      let ledgerErrorMessage = '';
+      try {
+        await createUploadLedger(initialLedger);
+      } catch (ledgerErr: any) {
+        console.error("Critical: Failed to pre-save upload ledger entry:", ledgerErr);
+        ledgerFailed = true;
+        ledgerErrorMessage = ledgerErr?.message || 'Database error occurred while recording initial ledger';
+        errorsList.push(`INITIAL LEDGER CREATION WARNING: ${ledgerErrorMessage}`);
+      }
+
+      // 3. Execute high-speed direct batch write with bounded concurrency (3) & max batch limit (450)
+      const res = await batchWriteLicenses(
+        cleanLicenses,
+        (completedBatches, totalBatches) => {
+          setProgress(Math.round((completedBatches / totalBatches) * 100));
+        },
+        { ledgerId }
+      );
 
       allBatchResults.push(res);
       imported = res.committedRows;
-
-      // Create Government Standard Upload History & Version Ledger
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
       let successfulBatchCount = res.successfulBatchCount;
       let failedBatchCount = res.failedBatchCount;
@@ -521,56 +576,54 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
       const aggregatedBatchDetails: BatchCommitDetail[] = res.batchDetails || [];
       const aggregatedFailedDetails: BatchCommitDetail[] = res.failedBatchDetails || [];
 
-      let verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' = 'VERIFIED';
+      let verificationStatus: 'VERIFIED' | 'PARTIAL SUCCESS' | 'FAILED' = res.verificationStatus;
+      let finalStatusText: 'Completed' | 'Partial Success' | 'Failed' = 'Completed';
       if (failedBatchCount > 0 && successfulBatchCount > 0) {
-        verificationStatus = 'PARTIAL SUCCESS';
+        finalStatusText = 'Partial Success';
       } else if (failedBatchCount > 0 && successfulBatchCount === 0) {
-        verificationStatus = 'FAILED';
+        finalStatusText = 'Failed';
       }
 
-      const verificationMetrics: VerificationMetrics = {
+      const finalVerificationMetrics: VerificationMetrics = {
         totalExcelRows: totalRecords,
         validRows: totalClean,
         skippedRows: skipped,
         duplicateRows: skipped,
-        expectedWrites: totalClean - skipped,
+        expectedWrites: cleanLicenses.length,
         successfulBatchCount,
         failedBatchCount,
         verificationStatus,
-        verificationTime: now.toISOString(),
+        verificationTime: new Date().toISOString(),
         verificationDurationMs: totalDurationMs,
         batchDetails: aggregatedBatchDetails,
         failedBatchDetails: aggregatedFailedDetails,
-        missingRecordsCount: failedBatchCount > 0 ? (totalClean - skipped - (imported + updated)) : 0
+        missingRecordsCount: failedBatchCount > 0 ? (cleanLicenses.length - (imported + updated)) : 0
       };
 
-      const ledgerEntry: UploadLedger = {
-        id: `LOT_${now.getFullYear()}_${Date.now().toString().slice(-6)}`,
-        timestamp: now.toISOString(),
-        fileName: file?.name || 'excel_upload.xlsx',
-        size: file ? `${(file.size / 1024).toFixed(1)} KB` : 'N/A',
-        actionType: totalRecords > 1000 ? 'Direct High-Speed Batch Import' : 'Safe Checked Import',
-        noOfLoadedRecords: totalRecords,
-        importedRecords: imported + updated,
-        duplicateRecords: skipped,
-        uploader: staffEmail || 'Super Admin',
-        status: verificationStatus === 'VERIFIED' ? 'Verified' : verificationStatus === 'PARTIAL SUCCESS' ? 'Partial Success' : 'Failed',
-        uploadDate: dateStr,
-        uploadTime: timeStr,
-        isActive: true,
-        fileUrl: archivedFileUrl || undefined,
-        ...verificationMetrics
-      };
-
-      let ledgerFailed = false;
-      let ledgerErrorMessage = '';
       try {
-        await createUploadLedger(ledgerEntry);
-      } catch (ledgerErr: any) {
-        console.error("Critical: Failed to save upload ledger entry:", ledgerErr);
-        ledgerFailed = true;
-        ledgerErrorMessage = ledgerErr?.message || 'Database error occurred while recording ledger';
-        errorsList.push(`LICENSE DATA COMMITTED — LEDGER CREATION FAILED: ${ledgerErrorMessage}`);
+        await updateUploadLedger(ledgerId, {
+          status: finalStatusText,
+          verificationStatus,
+          completedAt: new Date().toISOString(),
+          successfulBatchCount,
+          committedBatches: successfulBatchCount,
+          failedBatchCount,
+          failedBatches: failedBatchCount,
+          importedRecords: imported + updated,
+          committedRows: imported + updated,
+          failedRows: res.failedRows,
+          errorCode: res.lastErrorCode || null,
+          errorMessage: res.lastErrorMessage || (res.isQuotaExhausted ? 'Firestore quota exceeded' : null),
+          ...finalVerificationMetrics
+        });
+      } catch (updateErr: any) {
+        console.warn("Notice: Updating final ledger status:", updateErr);
+      }
+
+      if (res.isQuotaExhausted) {
+        errorsList.push('Firestore write quota limit reached during batch processing. Successfully written records were safely preserved.');
+      } else if (failedBatchCount > 0) {
+        errorsList.push(`Batch processing notice: ${failedBatchCount} batches failed during commit.`);
       }
 
       setReport({
@@ -590,27 +643,6 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
       console.error("Critical fail inside bulk importer: ", err);
       errorsList.push(err?.message || "Internal transaction timeout.");
 
-      const failedLedgerEntry: UploadLedger = {
-        id: `LOT_${now.getFullYear()}_${Date.now().toString().slice(-6)}`,
-        timestamp: now.toISOString(),
-        fileName: file?.name || 'excel_upload.xlsx',
-        size: file ? `${(file.size / 1024).toFixed(1)} KB` : 'N/A',
-        actionType: 'Failed Import',
-        noOfLoadedRecords: totalRecords,
-        importedRecords: imported + updated,
-        duplicateRecords: skipped,
-        uploader: staffEmail || 'Super Admin',
-        status: 'Failed',
-        uploadDate: dateStr,
-        uploadTime: timeStr,
-        isActive: false,
-        fileUrl: archivedFileUrl || undefined
-      };
-      try {
-        await createUploadLedger(failedLedgerEntry);
-      } catch (ledgerErr) {
-        console.warn("Notice saving failed upload ledger entry:", ledgerErr);
-      }
       setReport({
         total: totalRecords,
         imported,
