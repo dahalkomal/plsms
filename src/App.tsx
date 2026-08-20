@@ -110,22 +110,29 @@ export default function App() {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [isPlsmsPath, setIsPlsmsPath] = useState(() => {
+  const checkIsPlsmsPath = (pathname?: string): boolean => {
     try {
-      return window.location.pathname.replace(/\/$/, '') === '/plsms';
+      const rawPath = pathname !== undefined ? pathname : (typeof window !== 'undefined' ? window.location.pathname : '');
+      const clean = rawPath.trim().toLowerCase().replace(/\/+$/, '');
+      return clean === '/plsms' || clean.startsWith('/plsms/');
     } catch (e) {
       return false;
     }
-  });
+  };
+
+  const [isPlsmsPath, setIsPlsmsPath] = useState(() => checkIsPlsmsPath());
 
   useEffect(() => {
     const handlePathChange = () => {
       try {
-        setIsPlsmsPath(window.location.pathname.replace(/\/$/, '') === '/plsms');
+        const isPlsms = checkIsPlsmsPath();
+        setIsPlsmsPath(isPlsms);
         const params = new URLSearchParams(window.location.search);
         const tabParam = params.get('tab');
         if (tabParam && ['search', 'notices', 'dashboard', 'reports', 'requests', 'settings'].includes(tabParam)) {
           setActiveTab(tabParam as any);
+        } else if (isPlsms) {
+          setActiveTab('dashboard');
         } else {
           setActiveTab('search');
         }
@@ -391,35 +398,12 @@ export default function App() {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         sessionStorage.removeItem('sandbox_deliberate_logout');
-        const userObj = {
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-          emailVerified: user.emailVerified
-        };
-        try {
-          localStorage.setItem('plsms_live_user', JSON.stringify(userObj));
-        } catch (e) {}
         setCurrentUser(user);
-        resolveUserRole(user);
+        await resolveUserRole(user);
         setAuthLoading(false);
       } else {
-        const isDeliberateLogout = sessionStorage.getItem('sandbox_deliberate_logout') === 'true';
-        const cachedUserStr = localStorage.getItem('plsms_live_user');
-        if (!isDeliberateLogout && cachedUserStr) {
-          try {
-            const cachedUser = JSON.parse(cachedUserStr);
-            if (cachedUser && (cachedUser.email || cachedUser.uid)) {
-              setCurrentUser(cachedUser);
-              const cachedRole = (localStorage.getItem('plsms_mock_user_role') || 'staff') as AppRole;
-              setCurrentRole(cachedRole);
-              resolveUserRole(cachedUser);
-              setAuthLoading(false);
-              return;
-            }
-          } catch (e) {}
-        }
         localStorage.removeItem('plsms_live_user');
+        localStorage.removeItem('plsms_mock_user');
         localStorage.removeItem('plsms_mock_user_role');
         setCurrentUser(null);
         setCurrentRole('public');
@@ -717,24 +701,11 @@ export default function App() {
   };
 
   const handleRoleChanged = () => {
-    if (isDemoModeActive()) {
-      const mockUserStr = localStorage.getItem('plsms_mock_user');
-      if (mockUserStr) {
-        setCurrentUser(JSON.parse(mockUserStr));
-        setCurrentRole((localStorage.getItem('plsms_mock_user_role') || 'staff') as AppRole);
-      }
-    } else if (auth.currentUser) {
+    if (auth.currentUser) {
       resolveUserRole(auth.currentUser);
     } else {
-      const cachedFileUserStr = localStorage.getItem('plsms_live_user');
-      if (cachedFileUserStr) {
-        try {
-          const cachedUser = JSON.parse(cachedFileUserStr);
-          setCurrentUser(cachedUser);
-          const cachedRole = (localStorage.getItem('plsms_mock_user_role') || 'staff') as AppRole;
-          setCurrentRole(cachedRole);
-        } catch (e) {}
-      }
+      setCurrentUser(null);
+      setCurrentRole('public');
     }
   };
 
@@ -1200,10 +1171,13 @@ export default function App() {
         {/* Top Back Button (Matching Picture 1) */}
         <button
           onClick={() => {
-            if (isPlsmsPath) {
+            setIsPlsmsPath(false);
+            setIsSignInModalOpen(false);
+            setActiveTab('search');
+            try {
+              window.history.pushState({}, '', '/');
+            } catch (e) {
               window.location.href = '/';
-            } else {
-              setIsSignInModalOpen(false);
             }
           }}
           type="button"
