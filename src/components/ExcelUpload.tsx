@@ -437,13 +437,24 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         const distributedBy = columnMapping['distributedBy'] ? String(row[columnMapping['distributedBy']] || '').trim() : '';
         const statusVal = columnMapping['status'] ? String(row[columnMapping['status']] || '').trim().toLowerCase() : '';
 
-        const sanitizedId = rawLicenseNo.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+        const rawClean = rawLicenseNo ? String(rawLicenseNo).trim() : '';
+        let sanitizedId = rawClean.toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+        if (!sanitizedId && rawAppId) {
+          sanitizedId = String(rawAppId).trim().toUpperCase().replace(/[^A-Z0-9_\-\.]/g, '');
+        }
         if (!sanitizedId) {
-          skipped++;
-          continue;
+          sanitizedId = 'LIC_' + (sn || rowIdx + 1);
         }
 
-        if (seenMap.has(sanitizedId)) {
+        const upperNo = rawClean.toUpperCase();
+        const upperAppId = rawAppId ? String(rawAppId).trim().toUpperCase() : '';
+
+        const isDuplicate =
+          (upperNo && seenMap.has('LIC:' + upperNo)) ||
+          (upperAppId && seenMap.has('APP:' + upperAppId)) ||
+          seenMap.has('ID:' + sanitizedId);
+
+        if (isDuplicate) {
           if (duplicateStrategy === 'skip') {
             skipped++;
             continue;
@@ -451,7 +462,10 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
             updated++;
           }
         }
-        seenMap.add(sanitizedId);
+
+        if (upperNo) seenMap.add('LIC:' + upperNo);
+        if (upperAppId) seenMap.add('APP:' + upperAppId);
+        seenMap.add('ID:' + sanitizedId);
 
         const logItem = {
           timestamp: currentTime,

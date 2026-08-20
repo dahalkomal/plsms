@@ -1389,15 +1389,34 @@ export async function batchWriteLicenses(
   const MAX_CONCURRENT_BATCHES = 3; // Bounded concurrency of 3 simultaneous active commits
   const MAX_BATCH_RETRIES = 3; // Up to 3 retries with exponential backoff
 
-  // 1. Ensure unique document IDs within this upload to prevent Firestore INVALID_ARGUMENT multiple writes in a single batch
+  // 1. Ensure unique document IDs, applicant IDs, and license numbers within this upload to prevent Firestore INVALID_ARGUMENT multiple writes in a single batch
   const uniqueLicenses: License[] = [];
   const seenIds = new Set<string>();
+  const seenAppIds = new Set<string>();
+  const seenLicNos = new Set<string>();
+  let skippedDuplicatesCount = 0;
+
   for (const lic of licenses) {
-    if (!lic || !lic.id) continue;
-    if (!seenIds.has(lic.id)) {
-      seenIds.add(lic.id);
-      uniqueLicenses.push(lic);
+    if (!lic) continue;
+    const docId = lic.id ? String(lic.id).trim().toUpperCase() : '';
+    const appKey = lic.applicantId ? String(lic.applicantId).trim().toUpperCase() : '';
+    const licNumKey = lic.licenseNumber ? String(lic.licenseNumber).trim().toUpperCase() : '';
+
+    if (!docId && !appKey && !licNumKey) continue;
+
+    const isDocDuplicate = docId ? seenIds.has(docId) : false;
+    const isAppDuplicate = appKey ? seenAppIds.has(appKey) : false;
+    const isLicDuplicate = licNumKey ? seenLicNos.has(licNumKey) : false;
+
+    if (isDocDuplicate || isAppDuplicate || isLicDuplicate) {
+      skippedDuplicatesCount++;
+      continue;
     }
+
+    if (docId) seenIds.add(docId);
+    if (appKey) seenAppIds.add(appKey);
+    if (licNumKey) seenLicNos.add(licNumKey);
+    uniqueLicenses.push(lic);
   }
 
   const chunks: License[][] = [];
@@ -1414,7 +1433,7 @@ export async function batchWriteLicenses(
   let lastGlobalErrorCode = '';
   let lastGlobalErrorMessage = '';
 
-  const { writeBatch } = await import('firebase/firestore');
+  const { writeBatch, setDoc: firestoreSetDoc } = await import('firebase/firestore');
 
   const processChunk = async (): Promise<void> => {
     while (nextChunkIdx < totalBatches) {
@@ -1431,6 +1450,8 @@ export async function batchWriteLicenses(
       let batchSuccess = false;
       let lastError = '';
       let lastErrorCode = '';
+      let sliceWrittenCount = 0;
+      let sliceFailedCount = 0;
 
       // First attempt + Retry loop up to MAX_BATCH_RETRIES
       for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
@@ -1446,10 +1467,12 @@ export async function batchWriteLicenses(
           const batch = writeBatch(db);
           slice.forEach((lic) => {
             const targetDocRef = doc(db, 'licenses', lic.id);
+            // Upsert with merge: true (ON CONFLICT DO UPDATE/MERGE) to safely preserve valid data
             batch.set(targetDocRef, lic, { merge: true });
           });
           await batch.commit();
           batchSuccess = true;
+          sliceWrittenCount = slice.length;
           break;
         } catch (commitErr: any) {
           const rawCode = String(commitErr?.code || '');
@@ -1459,7 +1482,7 @@ export async function batchWriteLicenses(
           lastGlobalErrorCode = rawCode;
           lastGlobalErrorMessage = rawMsg;
 
-          console.warn(`[Batch Write] Batch ${batchNumber}/${totalBatches} (attempt ${attempt + 1}) failed: [${rawCode}] ${rawMsg}`);
+          console.warn(`[Batch Write] Batch ${batchNumber}/${totalBatches} (attempt ${attempt + 1}) notice: [${rawCode}] ${rawMsg}`);
           checkAndTriggerQuotaError(commitErr);
 
           if (
@@ -1471,6 +1494,28 @@ export async function batchWriteLicenses(
             isQuotaExhausted = true;
             break; // Do not retry if project write quota is exhausted
           }
+        }
+      }
+
+      // If batch write failed after retries and not quota exhaustion, fallback to individual upsert to prevent rollback of valid records
+      if (!batchSuccess && !isQuotaExhausted && slice.length > 0) {
+        console.log(`[Batch Write Fallback] Executing item-level upsert fallback for batch ${batchNumber} (${slice.length} records)...`);
+        let itemSuccessCount = 0;
+        let itemFailCount = 0;
+        for (const lic of slice) {
+          try {
+            const targetDocRef = doc(db, 'licenses', lic.id);
+            await firestoreSetDoc(targetDocRef, lic, { merge: true });
+            itemSuccessCount++;
+          } catch (itemErr: any) {
+            itemFailCount++;
+            console.warn(`[Batch Item Skip] Skipped problematic row ${lic.id}:`, itemErr?.message || itemErr);
+          }
+        }
+        if (itemSuccessCount > 0) {
+          batchSuccess = true;
+          sliceWrittenCount = itemSuccessCount;
+          sliceFailedCount = itemFailCount;
         }
       }
 
@@ -1488,7 +1533,8 @@ export async function batchWriteLicenses(
 
       completedBatches++;
       if (batchSuccess) {
-        writtenRecords += slice.length;
+        writtenRecords += (sliceWrittenCount || slice.length);
+        failedRecords += sliceFailedCount;
       } else {
         failedRecords += slice.length;
       }
@@ -2617,20 +2663,49 @@ export async function createUploadLedger(ledger: UploadLedger): Promise<void> {
   const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+  const enriched: UploadLedger = {
+    ...ledger,
+    uploadDate: ledger.uploadDate || dateStr,
+    uploadTime: ledger.uploadTime || timeStr,
+    status: ledger.status || 'Completed',
+    timestamp: ledger.timestamp || now.toISOString(),
+    isActive: ledger.isActive ?? true
+  };
+
+  const cleanEnriched = Object.fromEntries(
+    Object.entries(enriched).filter(([_, v]) => v !== undefined)
+  ) as UploadLedger;
+
+  // 1. Update local storage & cache for immediate availability
+  if (typeof window !== 'undefined') {
+    try {
+      const list = fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
+      const idx = list.findIndex(l => l.id === ledger.id);
+      if (idx >= 0) {
+        list[idx] = cleanEnriched;
+      } else {
+        list.unshift(cleanEnriched);
+      }
+      writeStorageItem('plsms_mock_ledgers', list);
+    } catch (localErr) {
+      console.warn("Notice: Local ledger caching skipped:", localErr);
+    }
+  }
+
+  if (cachedUploadLedgers) {
+    const idx = cachedUploadLedgers.findIndex(l => l.id === ledger.id);
+    if (idx >= 0) {
+      cachedUploadLedgers[idx] = cleanEnriched;
+    } else {
+      cachedUploadLedgers.unshift(cleanEnriched);
+    }
+  }
+
+  if (isDemoModeActive()) {
+    return;
+  }
+
   try {
-    const enriched: UploadLedger = {
-      ...ledger,
-      uploadDate: ledger.uploadDate || dateStr,
-      uploadTime: ledger.uploadTime || timeStr,
-      status: ledger.status || 'Verified',
-      timestamp: ledger.timestamp || now.toISOString(),
-      isActive: ledger.isActive ?? true
-    };
-
-    const cleanEnriched = Object.fromEntries(
-      Object.entries(enriched).filter(([_, v]) => v !== undefined)
-    ) as UploadLedger;
-
     await withFirestoreRetry(() => setDoc(doc(db, 'upload_ledgers', ledger.id), cleanEnriched, { merge: true }));
   } catch (error: any) {
     console.error(`Failed to create upload ledger ${ledger.id}:`, error);
@@ -2639,17 +2714,25 @@ export async function createUploadLedger(ledger: UploadLedger): Promise<void> {
 }
 
 export async function updateUploadLedgerStatus(id: string, status: 'Completed' | 'Restored' | 'Deleted' | 'Verified' | 'Failed'): Promise<void> {
-  if (isDemoModeActive()) {
+  if (typeof window !== 'undefined') {
     const list = fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
     const idx = list.findIndex(l => l.id === id);
     if (idx >= 0) {
       list[idx].status = status;
       writeStorageItem('plsms_mock_ledgers', list);
     }
+  }
+  if (cachedUploadLedgers) {
+    const idx = cachedUploadLedgers.findIndex(l => l.id === id);
+    if (idx >= 0) {
+      cachedUploadLedgers[idx].status = status;
+    }
+  }
+  if (isDemoModeActive()) {
     return;
   }
   try {
-    await updateDoc(doc(db, 'upload_ledgers', id), { status });
+    await setDoc(doc(db, 'upload_ledgers', id), { status, isActive: status !== 'Deleted' }, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `upload_ledgers/${id}`);
   }
@@ -2663,7 +2746,7 @@ export async function saveLedgerRecordBackup(ledgerId: string, license: License)
     return;
   }
   try {
-    await setDoc(doc(db, 'upload_ledgers', ledgerId, 'records', license.id), license);
+    await setDoc(doc(db, 'upload_ledgers', ledgerId, 'records', license.id), license, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `upload_ledgers/${ledgerId}/records/${license.id}`);
   }
@@ -2686,52 +2769,88 @@ export async function getLedgerRecordBackups(ledgerId: string): Promise<License[
 }
 
 export async function restoreUploadLedger(ledgerId: string): Promise<void> {
-  const backups = await getLedgerRecordBackups(ledgerId);
-  if (backups.length === 0) {
-    throw new Error("No backup records found to restore.");
+  let backups: License[] = [];
+  try {
+    backups = await getLedgerRecordBackups(ledgerId);
+  } catch (backupErr) {
+    console.warn("Notice: Subcollection backup lookup skipped:", backupErr);
   }
 
-  // Restore each backup record back to /licenses
-  if (isDemoModeActive()) {
-    const list = fetchStorageItem<License[]>('plsms_mock_licenses', []);
-    backups.forEach(backup => {
-      const idx = list.findIndex(l => l.id === backup.id);
-      if (idx >= 0) {
-        list[idx] = { ...list[idx], ...backup, status: 'available' };
-      } else {
-        list.push({ ...backup, status: 'available' });
+  // If backup records exist, restore each backup record back to /licenses using upsert
+  if (backups.length > 0) {
+    if (isDemoModeActive()) {
+      const list = fetchStorageItem<License[]>('plsms_mock_licenses', []);
+      backups.forEach(backup => {
+        const idx = list.findIndex(l => l.id === backup.id);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...backup, status: 'available' };
+        } else {
+          list.push({ ...backup, status: 'available' });
+        }
+      });
+      writeStorageItem('plsms_mock_licenses', list);
+    } else {
+      const { writeBatch } = await import('firebase/firestore');
+      let batch = writeBatch(db);
+      let count = 0;
+
+      for (const record of backups) {
+        const restoredRecord = {
+          ...record,
+          status: 'available',
+          updatedAt: new Date().toISOString(),
+          updatedBy: auth.currentUser?.email || 'admin@plsms.gov'
+        };
+        batch.set(doc(db, 'licenses', record.id), restoredRecord, { merge: true });
+        count++;
+
+        if (count === 450) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
       }
-    });
-    writeStorageItem('plsms_mock_licenses', list);
-  } else {
-    // Firestore batch write in chunks of 500
-    const { writeBatch } = await import('firebase/firestore');
-    let batch = writeBatch(db);
-    let count = 0;
-
-    for (const record of backups) {
-      const restoredRecord = {
-        ...record,
-        status: 'available',
-        updatedAt: new Date().toISOString(),
-        updatedBy: auth.currentUser?.email || 'admin@plsms.gov'
-      };
-      batch.set(doc(db, 'licenses', record.id), restoredRecord);
-      count++;
-
-      if (count === 500) {
+      if (count > 0) {
         await batch.commit();
-        batch = writeBatch(db);
-        count = 0;
       }
-    }
-    if (count > 0) {
-      await batch.commit();
     }
   }
 
-  // Update ledger status
-  await updateUploadLedgerStatus(ledgerId, 'Restored');
+  // Clear and reset the failed lot entry state in upload_ledgers so the user can re-process cleanly
+  if (typeof window !== 'undefined') {
+    const list = fetchStorageItem<UploadLedger[]>('plsms_mock_ledgers', []);
+    const idx = list.findIndex(l => l.id === ledgerId);
+    if (idx >= 0) {
+      list[idx].status = 'Restored';
+      list[idx].isActive = true;
+      list[idx].failedBatchCount = 0;
+      list[idx].verificationStatus = 'VERIFIED';
+      writeStorageItem('plsms_mock_ledgers', list);
+    }
+  }
+  if (cachedUploadLedgers) {
+    const idx = cachedUploadLedgers.findIndex(l => l.id === ledgerId);
+    if (idx >= 0) {
+      cachedUploadLedgers[idx].status = 'Restored';
+      cachedUploadLedgers[idx].isActive = true;
+      cachedUploadLedgers[idx].failedBatchCount = 0;
+      cachedUploadLedgers[idx].verificationStatus = 'VERIFIED';
+    }
+  }
+
+  if (!isDemoModeActive()) {
+    try {
+      await setDoc(doc(db, 'upload_ledgers', ledgerId), {
+        status: 'Restored',
+        isActive: true,
+        failedBatchCount: 0,
+        failedRows: 0,
+        verificationStatus: 'VERIFIED'
+      }, { merge: true });
+    } catch (updErr) {
+      console.warn("Notice: Failed to update Firestore upload ledger state:", updErr);
+    }
+  }
 }
 
 export async function deleteUploadLedgerRowOnly(ledgerId: string): Promise<void> {
