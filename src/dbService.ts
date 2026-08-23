@@ -1339,16 +1339,21 @@ export async function deleteLicense(id: string): Promise<void> {
 
 export function sanitizeFirestoreData<T>(data: T): T {
   if (data === null || data === undefined) {
-    return data;
+    return (data === undefined ? null : data) as unknown as T;
   }
   if (Array.isArray(data)) {
-    return data.map(item => sanitizeFirestoreData(item)) as unknown as T;
+    return data
+      .filter(item => item !== undefined)
+      .map(item => sanitizeFirestoreData(item)) as unknown as T;
   }
   if (typeof data === 'object' && !(data instanceof Date)) {
     const cleaned: any = {};
     for (const [key, value] of Object.entries(data)) {
       if (value !== undefined) {
-        cleaned[key] = sanitizeFirestoreData(value);
+        const sanitized = sanitizeFirestoreData(value);
+        if (sanitized !== undefined) {
+          cleaned[key] = sanitized;
+        }
       }
     }
     return cleaned as T;

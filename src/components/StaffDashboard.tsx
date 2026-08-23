@@ -29,6 +29,7 @@ import { HistoryAutocompleteField } from './HistoryAutocompleteField';
 import { HistorySuggestionService } from '../utils/HistorySuggestionService';
 import { isLicenseMatch, nepaliToEnglishDigits } from '../utils/licenseNormalizer';
 import { classifySearchInput } from '../utils/searchClassifier';
+import { searchLicenseBySmartIdentifier } from '../utils/searchEngineService';
 import { exportReportToExcel, exportReportToPdf, exportReportToCsv, exportIntegratedReportToExcel } from '../utils/reportExportEngine';
 
 interface StaffDashboardProps {
@@ -330,23 +331,24 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       const kpis = await getDashboardKpiCounts();
       setServerKpiCounts(kpis);
 
-      // Refresh the first visible table page using current page size
-      const currentSize = pageSize > 0 ? pageSize : 100;
-      const paginatedRes = await getPaginatedLicenses({
-        pageSize: currentSize,
-        lastDocSnap: null,
-        statusFilter: activeRegister,
-        searchQuery
-      });
-      setLicenses(paginatedRes.records);
-      setServerTotalCount(paginatedRes.totalCount);
+      // If active search query exists, refresh matching records; otherwise keep table empty
+      const trimmed = searchQuery.trim();
+      if (trimmed) {
+        const res = await searchLicenseBySmartIdentifier(trimmed, { statusFilter: activeRegister });
+        if (res.success) {
+          setLicenses(res.records);
+          setServerTotalCount(res.records.length);
+        } else {
+          setLicenses([]);
+          setServerTotalCount(0);
+        }
+      } else {
+        setLicenses([]);
+        setServerTotalCount(0);
+      }
       setFetchError(null);
       setCurrentPage(1);
-      if (paginatedRes.lastDocSnap) {
-        setPageDocSnaps([null, paginatedRes.lastDocSnap]);
-      } else {
-        setPageDocSnaps([null]);
-      }
+      setPageDocSnaps([null]);
 
       // Refresh collection requests count & upload ledgers
       const reqList = await getAllCollectionRequests();
@@ -363,7 +365,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       console.warn("Error inside lightweight dashboard refresh:", err);
       setFetchError(err?.message || "Unable to retrieve current database data. Please try again.");
     }
-  }, [pageSize, activeRegister, searchQuery]);
+  }, [activeRegister, searchQuery]);
 
   // Stable ref for subscriber to avoid re-subscribing on tab/query changes
   const refreshCallbackRef = React.useRef(refreshDashboardLightweight);
@@ -1081,55 +1083,52 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
   // Pending statistics connected to centralized Registry Data Store
   const pendingRequestsCount = collectionRequests.length;
 
-  // Track previous filter state to prevent duplicate queries on filter reset
-  const prevFilterState = React.useRef({ activeRegister, debouncedSearchQuery, pageSize });
-
+  // Execute targeted smart lookup only when search query is entered; otherwise keep table empty
   useEffect(() => {
     let active = true;
     const fetchPage = async () => {
+      const trimmed = debouncedSearchQuery.trim();
+      if (!trimmed) {
+        if (active) {
+          setLicenses([]);
+          setServerTotalCount(0);
+          setIsSearching(false);
+          setFetchError(null);
+        }
+        return;
+      }
+
+      const classification = classifySearchInput(trimmed);
+      if (classification.type === 'INVALID') {
+        if (active) {
+          setLicenses([]);
+          setServerTotalCount(0);
+          setIsSearching(false);
+        }
+        return;
+      }
+
       try {
         setIsSearching(true);
-        const filtersChanged = 
-          prevFilterState.current.activeRegister !== activeRegister ||
-          prevFilterState.current.debouncedSearchQuery !== debouncedSearchQuery ||
-          prevFilterState.current.pageSize !== pageSize;
-
-        if (filtersChanged) {
-          prevFilterState.current = { activeRegister, debouncedSearchQuery, pageSize };
-          if (currentPage !== 1) {
-            setCurrentPage(1);
-            setPageDocSnaps([null]);
-            return;
-          }
-          setPageDocSnaps([null]);
-        }
-
-        const effectivePage = filtersChanged ? 1 : currentPage;
-        const lastDocSnap = effectivePage === 1 ? null : (pageDocSnaps[effectivePage - 1] || null);
-
-        const res = await getPaginatedLicenses({
-          pageSize: pageSize === 0 ? 0 : pageSize,
-          lastDocSnap,
-          statusFilter: activeRegister,
-          searchQuery: debouncedSearchQuery
-        });
-
+        const res = await searchLicenseBySmartIdentifier(trimmed, { statusFilter: activeRegister });
         if (active) {
-          setLicenses(res.records);
-          setServerTotalCount(res.totalCount);
-          setFetchError(null);
-          if (res.lastDocSnap) {
-            setPageDocSnaps(prev => {
-              const updated = filtersChanged ? [null] : [...prev];
-              updated[effectivePage] = res.lastDocSnap;
-              return updated;
-            });
+          if (res.success) {
+            setLicenses(res.records);
+            setServerTotalCount(res.records.length);
+            setFetchError(null);
+          } else if (res.isQuotaError) {
+            setLicenses([]);
+            setServerTotalCount(0);
+            setFetchError(res.error || "Firestore quota temporarily reached.");
+          } else {
+            setLicenses([]);
+            setServerTotalCount(0);
           }
         }
       } catch (err: any) {
-        console.warn("Error fetching paginated page:", err);
+        console.warn("Error searching license:", err);
         if (active) {
-          setFetchError(err?.message || "Failed to fetch page data.");
+          setFetchError(err?.message || "Failed to search record.");
         }
       } finally {
         if (active) {
@@ -1139,7 +1138,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
     };
     fetchPage();
     return () => { active = false; };
-  }, [currentPage, pageSize, activeRegister, debouncedSearchQuery]);
+  }, [activeRegister, debouncedSearchQuery]);
 
   const totalPages = useMemo(() => {
     if (pageSize === 0) return 1;
@@ -1739,7 +1738,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
 
           {/* Ledger Table */}
           {loading ? (
-            <div className={`text-center py-12 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Loading ledger lists...</div>
+            <div className={`text-center py-12 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Loading statistics...</div>
           ) : fetchError ? (
             <div className={`text-center py-12 px-4 text-xs rounded-2xl border border-dashed space-y-3 ${
               isDark ? 'bg-red-950/20 border-red-800/50 text-red-400' : 'bg-red-50 border-red-200 text-red-700 font-medium'
@@ -1758,33 +1757,47 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
                 </button>
               </div>
             </div>
+          ) : !searchQuery.trim() ? (
+            <div className={`text-center py-14 px-4 text-xs rounded-2xl border border-dashed space-y-3 transition-all ${
+              isDark ? 'bg-slate-950/40 border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600'
+            }`}>
+              <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border shadow-xs ${
+                  isDark ? 'bg-slate-900 border-slate-800 text-cyan-400' : 'bg-white border-slate-200 text-blue-600'
+                }`}>
+                  <Search className="w-5 h-5" />
+                </div>
+                <p className="font-bold text-sm text-slate-800 dark:text-slate-200">
+                  Enter a License Number or Applicant ID to search and display records
+                </p>
+                <p className="text-[11px] text-slate-500 font-sans">
+                  रेकर्ड खोज्न र व्यवस्थापन गर्न माथि खोज बाकसमा लाइसेन्स नम्बर वा आवेदन नम्बर प्रविष्ट गर्नुहोस्।
+                </p>
+              </div>
+            </div>
           ) : filteredLicenses.length === 0 ? (
             <div className={`text-center py-12 px-4 text-xs rounded-2xl border border-dashed space-y-3 ${
               isDark ? 'bg-slate-950/40 border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600 font-medium'
             }`}>
               <p>
-                {searchQuery.trim()
-                  ? (() => {
-                      const cl = classifySearchInput(searchQuery);
-                      if (cl.type === 'LICENSE_NUMBER') return `No record found for License Number "${cl.normalizedQuery}" under this register.`;
-                      if (cl.type === 'APPLICANT_ID') return `No record found for Applicant ID "${cl.normalizedQuery}" under this register.`;
-                      return "No matching record found.";
-                    })()
-                  : "No licensed entries under this register match current view constraints."}
+                {(() => {
+                  const cl = classifySearchInput(searchQuery);
+                  if (cl.type === 'LICENSE_NUMBER') return `No record found for License Number "${cl.normalizedQuery}" under this register.`;
+                  if (cl.type === 'APPLICANT_ID') return `No record found for Applicant ID "${cl.normalizedQuery}" under this register.`;
+                  return "No matching record found.";
+                })()}
               </p>
-              {searchQuery.trim() && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setDebouncedSearchQuery('');
-                  }}
-                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold rounded-lg cursor-pointer transition-colors inline-flex items-center gap-1.5"
-                >
-                  <X className="w-3 h-3" />
-                  Clear Search Filter
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setDebouncedSearchQuery('');
+                }}
+                className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold rounded-lg cursor-pointer transition-colors inline-flex items-center gap-1.5"
+              >
+                <X className="w-3 h-3" />
+                Clear Search Filter
+              </button>
             </div>
           ) : (
             <>

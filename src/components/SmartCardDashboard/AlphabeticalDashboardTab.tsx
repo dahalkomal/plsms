@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { License } from '../../types';
-import { getAlphabeticalSummary, getLicensesByAlphabet, AlphabetStat, AlphabeticalSummaryResult } from '../../dbService';
+import { getAlphabeticalSummary, AlphabeticalSummaryResult } from '../../dbService';
 import { registryDataStore } from '../../registryDataStore';
-import { Search, X, Loader2, Filter, RefreshCw, AlertCircle } from 'lucide-react';
+import { Loader2, Filter, RefreshCw, AlertCircle } from 'lucide-react';
 import NepaliDatePicker from '../NepaliDatePicker';
 
 interface AlphabeticalDashboardTabProps {
-  licenses: License[];
+  licenses?: License[];
   theme: string;
   onGoToOverview?: () => void;
 }
@@ -15,10 +15,6 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
   const [summary, setSummary] = useState<AlphabeticalSummaryResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [selectedAlphabet, setSelectedAlphabet] = useState<string | null>(null);
-  const [selectedRecords, setSelectedRecords] = useState<License[]>([]);
-  const [recordsLoading, setRecordsLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
 
   // Nepali Date Range Filter States
   const [fromDate, setFromDate] = useState<string>('');
@@ -64,40 +60,10 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
     loadSummary('', '');
   };
 
-  const handleSelectAlphabet = async (alpha: string) => {
-    setSelectedAlphabet(alpha);
-    setSearchQuery('');
-    setRecordsLoading(true);
-    try {
-      const recs = await getLicensesByAlphabet(
-        alpha,
-        isFiltered ? fromDate : undefined,
-        isFiltered ? toDate : undefined,
-        licenses
-      );
-      setSelectedRecords(recs);
-    } catch (err) {
-      console.error("Failed to load records for alphabet:", err);
-      setSelectedRecords([]);
-    } finally {
-      setRecordsLoading(false);
-    }
-  };
-
   const alphabetStats = summary?.alphabetStats || [];
   const totalCount = summary?.totalCount || 0;
   const totalDistributed = summary?.totalDistributed || 0;
   const totalRemained = summary?.totalRemained || 0;
-
-  const filteredSelectedRecords = useMemo(() => {
-    if (!searchQuery.trim()) return selectedRecords;
-    const q = searchQuery.trim().toLowerCase();
-    return selectedRecords.filter(r => 
-      (r.fullName || '').toLowerCase().includes(q) ||
-      (r.licenseNumber || '').toLowerCase().includes(q) ||
-      (r.applicantId || '').toLowerCase().includes(q)
-    );
-  }, [selectedRecords, searchQuery]);
 
   return (
     <div className="w-full animate-in fade-in duration-300">
@@ -226,13 +192,11 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
                     return (
                       <tr
                         key={row.alphabet}
-                        onClick={() => hasData && handleSelectAlphabet(row.alphabet)}
                         className={`transition-all border border-black dark:border-slate-600 ${
-                          hasData ? 'cursor-pointer hover:bg-cyan-500/15 font-semibold' : 'opacity-65 font-normal'
+                          hasData ? 'font-semibold' : 'opacity-65 font-normal'
                         } ${
-                          isDark ? 'hover:bg-slate-800/60 text-slate-100' : 'hover:bg-slate-100 text-slate-900'
+                          isDark ? 'text-slate-100' : 'text-slate-900'
                         }`}
-                        title={hasData ? `Click to view all applicants under letter ${row.alphabet}` : `No records under letter ${row.alphabet}`}
                       >
                         <td className="py-3.5 px-4 text-center font-bold border border-black dark:border-slate-600">
                           <div className="flex items-center justify-center gap-3">
@@ -354,118 +318,6 @@ export default function AlphabeticalDashboardTab({ licenses, theme }: Alphabetic
           </tfoot>
         </table>
       </div>
-
-      {/* Alphabet Detail Records Drawer / Modal (Interactive Screen Only) */}
-      {selectedAlphabet && (
-        <div className="print:hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className={`w-full max-w-4xl max-h-[85vh] flex flex-col rounded-3xl border shadow-2xl overflow-hidden ${
-            isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
-          }`}>
-            <div className="p-5 border-b border-slate-800/40 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <span className="w-10 h-10 rounded-2xl bg-cyan-600 text-white flex items-center justify-center font-black text-lg font-mono shadow-md">
-                  {selectedAlphabet.slice(0, 1)}
-                </span>
-                <div>
-                  <h3 className={`text-base font-black uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                    Records Starting With Letter "{selectedAlphabet}"
-                  </h3>
-                  <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Showing {filteredSelectedRecords.length} smart card applicant records
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedAlphabet(null);
-                  setSearchQuery('');
-                }}
-                className="p-2 rounded-xl bg-slate-800/50 hover:bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 border-b border-slate-800/30 flex items-center gap-3">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                <input
-                  type="text"
-                  placeholder="Search inside this letter by Name, License No, or ID..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className={`w-full pl-10 pr-4 py-2 text-xs rounded-xl border outline-hidden transition-all ${
-                    isDark
-                      ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500 focus:border-cyan-500'
-                      : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-cyan-600'
-                  }`}
-                />
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {recordsLoading ? (
-                <div className="py-12 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-cyan-500" />
-                  <span>Loading records starting with letter "{selectedAlphabet}"...</span>
-                </div>
-              ) : filteredSelectedRecords.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-500">
-                  No records found under letter "{selectedAlphabet}" matching "{searchQuery}".
-                </div>
-              ) : (
-                filteredSelectedRecords.map(rec => (
-                  <div
-                    key={rec.id}
-                    className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-all ${
-                      isDark ? 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700' : 'bg-slate-50 border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`font-black text-sm uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                          {rec.fullName}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                          rec.status === 'distributed' || rec.distributed
-                            ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/60'
-                            : rec.status === 'missing'
-                            ? 'bg-rose-955/40 text-rose-400 border border-rose-800/60'
-                            : 'bg-cyan-950/50 text-cyan-400 border border-cyan-800/60'
-                        }`}>
-                          {rec.status}
-                        </span>
-                      </div>
-                      <div className={`text-[11px] font-mono flex flex-wrap items-center gap-3 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                        <span>Lic: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{rec.licenseNumber}</strong></span>
-                        <span>ID: <strong>{rec.applicantId}</strong></span>
-                        <span>Cat: <strong>{rec.category || 'A'}</strong></span>
-                      </div>
-                    </div>
-                    <div className="text-right font-mono text-[10px] text-slate-500">
-                      Updated: {rec.updatedAt ? rec.updatedAt.slice(0, 10) : '---'}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="p-4 border-t border-slate-800/40 flex justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedAlphabet(null);
-                  setSearchQuery('');
-                }}
-                className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
-              >
-                Close Window
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
