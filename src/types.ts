@@ -17,6 +17,10 @@ export interface License {
   licenseNumber: string;
   category?: string;
   department?: string;
+  departmant?: string;
+  contactSection?: string;
+  ontactSection?: string;
+  distributionDay?: string;
   receivedBy?: string;
   status: LicenseStatus;
   createdAt: string;

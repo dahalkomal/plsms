@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
-import { convertADToBS } from '../utils/dateConverter';
+import { convertADToBS, getBSMonthDays, getBSDateWeekday, toDevanagariNumeral } from '../utils/dateConverter';
 
 interface NepaliDatePickerProps {
   value: { year: number; month: number; day: number } | string | null | undefined;
@@ -10,7 +10,7 @@ interface NepaliDatePickerProps {
   placeholder?: string;
 }
 
-const nepaliYears = [2077, 2078, 2079, 2080, 2081, 2082, 2083, 2084, 2085, 2086, 2087];
+const nepaliYears = Array.from({ length: 26 }, (_, i) => 2070 + i);
 
 const nepaliMonths = [
   { value: 1, label: "वैशाख", en: "Baishakh" },
@@ -31,60 +31,7 @@ const nepaliMonthNames = [
   "", "वैशाख", "जेठ", "असार", "साउन", "भदौ", "असोज", "कात्तिक", "मंसिर", "पुस", "माघ", "फागुन", "चैत"
 ];
 
-const toNepaliDigits = (num: number | string): string => {
-  const nepaliDigits = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
-  return String(num).split('').map(char => {
-    const digit = parseInt(char, 10);
-    return isNaN(digit) ? char : nepaliDigits[digit];
-  }).join('');
-};
-
-const getBSMonthDays = (year: number, month: number): number => {
-  const yearConfigs: Record<number, number[]> = {
-    2077: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2078: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2079: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2080: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2081: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2082: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2083: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2084: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2085: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2086: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30],
-    2087: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30]
-  };
-  return yearConfigs[year]?.[month - 1] || 30;
-};
-
-// Calculate the weekday of day 1 of any BS month (0 = Sun, 1 = Mon, ..., 6 = Sat)
-const getBSDateWeekday = (bsYear: number, bsMonth: number, bsDay: number): number => {
-  const yearConfigs: Record<number, { adYear: number; m: number; d: number; lengths: number[] }> = {
-    2077: { adYear: 2020, m: 3, d: 13, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2078: { adYear: 2021, m: 3, d: 14, lengths: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2079: { adYear: 2022, m: 3, d: 14, lengths: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2080: { adYear: 2023, m: 3, d: 14, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2081: { adYear: 2024, m: 3, d: 13, lengths: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2082: { adYear: 2025, m: 3, d: 14, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2083: { adYear: 2026, m: 3, d: 14, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2084: { adYear: 2027, m: 3, d: 14, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2085: { adYear: 2028, m: 3, d: 13, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2086: { adYear: 2029, m: 3, d: 14, lengths: [31, 31, 32, 32, 31, 30, 30, 30, 29, 30, 29, 30] },
-    2087: { adYear: 2030, m: 3, d: 14, lengths: [31, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 30] }
-  };
-
-  const config = yearConfigs[bsYear];
-  if (!config) return 0;
-
-  let daysOffset = 0;
-  for (let i = 0; i < bsMonth - 1; i++) {
-    daysOffset += config.lengths[i];
-  }
-  daysOffset += (bsDay - 1);
-
-  const startOfBS = new Date(config.adYear, config.m, config.d);
-  const targetDate = new Date(startOfBS.getTime() + daysOffset * 24 * 60 * 60 * 1000);
-  return targetDate.getDay();
-};
+const toNepaliDigits = toDevanagariNumeral;
 
 export default function NepaliDatePicker({ value, onChange, label, isDark, placeholder }: NepaliDatePickerProps) {
   const [isOpen, setIsOpen] = useState(false);

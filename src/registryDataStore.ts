@@ -119,6 +119,19 @@ export class RegistryDataStore {
   }
 
   /**
+   * Add multiple records to the registry store.
+   */
+  public addRecords(records: License[]): void {
+    if (!Array.isArray(records) || records.length === 0) return;
+    for (const record of records) {
+      if (!record) continue;
+      const key = (record.id || record.licenseNumber || record.applicantId).trim().toUpperCase();
+      this.recordsMap.set(key, record);
+    }
+    this.rebuildListAndNotify();
+  }
+
+  /**
    * Update specific fields of an existing record in the registry store.
    */
   public updateRecord(id: string, updates: Partial<License>): boolean {
@@ -217,6 +230,39 @@ export class RegistryDataStore {
       else if (rawStatus.includes('miss')) status = 'missing';
       else if (rawStatus.includes('found')) status = 'found';
 
+      const rawDept = String(
+        row['DEPARTMENT'] ||
+        row['Department'] ||
+        row['department'] ||
+        row['DEPARTMANT'] ||
+        row['Departmant'] ||
+        row['departmant'] ||
+        row['ONTACT SECTION'] ||
+        row['Ontact Section'] ||
+        row['ontact section'] ||
+        row['CONTACT SECTION'] ||
+        row['Contact Section'] ||
+        row['contact section'] ||
+        row['DISTRIBUTION DATE'] ||
+        row['Distribution Date'] ||
+        row['distribution date'] ||
+        row['DISTRIBUTION DAY'] ||
+        row['Distribution Day'] ||
+        row['distribution day'] ||
+        row['DISTRIBUTED DATE'] ||
+        row['Distributed Date'] ||
+        row['distributed date'] ||
+        row['DIST DATE'] ||
+        row['DIST DAY'] ||
+        row['VISITING DATE'] ||
+        row['VISITING DAY'] ||
+        row['SECTION'] ||
+        row['Section'] ||
+        row['DEPT'] ||
+        row['Dept'] ||
+        ''
+      ).trim();
+
       const uniqueKey = (licenseNumber || applicantId).toUpperCase();
       if (seenKeys.has(uniqueKey)) {
         duplicateCount++;
@@ -231,6 +277,7 @@ export class RegistryDataStore {
         fullName,
         licenseNumber,
         category,
+        department: rawDept || undefined,
         status,
         mobileNumber,
         createdAt: now,

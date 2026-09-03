@@ -59,6 +59,12 @@ export function sanitizeErrorMessage(err: unknown, fallbackMessage = "An unexpec
   if (!err) return fallbackMessage;
 
   const rawMsg = typeof err === 'string' ? err : (err as any)?.message || String(err);
+  const lower = rawMsg.toLowerCase();
+
+  // Suppress technical quota or limit messages completely
+  if (lower.includes('quota') || lower.includes('resource-exhausted') || lower.includes('resource_exhausted') || lower.includes('free daily read units') || lower.includes('firestore.googleapis.com') || lower.includes('quota limit')) {
+    return "";
+  }
 
   // Check for common safe user messages
   if (rawMsg.includes('permission-denied') || rawMsg.includes('Missing or insufficient permissions')) {
@@ -66,9 +72,6 @@ export function sanitizeErrorMessage(err: unknown, fallbackMessage = "An unexpec
   }
   if (rawMsg.includes('unauthenticated') || rawMsg.includes('User not signed in')) {
     return "Authentication Error: Please log in to proceed.";
-  }
-  if (rawMsg.includes('quota-exceeded') || rawMsg.includes('RESOURCE_EXHAUSTED')) {
-    return "System Warning: Database quota limit reached. Switching to safe offline mode.";
   }
   if (rawMsg.includes('not-found')) {
     return "The requested record could not be found.";
@@ -78,7 +81,7 @@ export function sanitizeErrorMessage(err: unknown, fallbackMessage = "An unexpec
   }
 
   // Hide internal paths, project IDs, stack trace details
-  if (rawMsg.includes('projects/') || rawMsg.includes('databases/') || rawMsg.includes('documents/') || rawMsg.includes('at ')) {
+  if (rawMsg.includes('projects/') || rawMsg.includes('databases/') || rawMsg.includes('documents/') || rawMsg.includes('at ') || rawMsg.includes('project_number:')) {
     return fallbackMessage;
   }
 

@@ -157,7 +157,25 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
             initialMapping['oldCode'] = col;
           } else if (norm.includes('newcode') || norm.includes('new') || norm === 'new_code') {
             initialMapping['newCode'] = col;
-          } else if (norm.includes('department') || norm.includes('departmen') || norm.includes('dept')) {
+          } else if (
+            norm.includes('department') || 
+            norm.includes('departmen') || 
+            norm.includes('departmant') ||
+            norm.includes('dept') ||
+            norm.includes('ontactsection') ||
+            norm.includes('contactsection') ||
+            norm.includes('contactsec') ||
+            norm.includes('ontactsec') ||
+            norm.includes('distributionday') ||
+            norm.includes('distday') ||
+            norm.includes('distributiondate') ||
+            norm.includes('distdate') ||
+            norm.includes('visitingdate') ||
+            norm.includes('visitingday') ||
+            norm.includes('section') ||
+            norm.includes('ontact') ||
+            norm.includes('contact')
+          ) {
             initialMapping['department'] = col;
           } else if (norm.includes('received') || norm.includes('receiver') || norm.includes('receivedby') || norm === 'received_by') {
             initialMapping['receivedBy'] = col;
@@ -178,6 +196,28 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
             if (found) initialMapping[req] = found;
           }
         });
+
+        // Fallback matching for department / contact section / distribution date / distribution day
+        if (!initialMapping['department']) {
+          const deptFound = cols.find(c => {
+            const n = c.toLowerCase().replace(/[\s_\-\/\.]/g, '');
+            return (
+              n.includes('department') ||
+              n.includes('departmant') ||
+              n.includes('departmen') ||
+              n.includes('dept') ||
+              n.includes('ontact') ||
+              n.includes('contact') ||
+              n.includes('section') ||
+              n.includes('distributionday') ||
+              n.includes('distday') ||
+              n.includes('distributiondate') ||
+              n.includes('distdate') ||
+              n.includes('visiting')
+            );
+          });
+          if (deptFound) initialMapping['department'] = deptFound;
+        }
 
         setColumnMapping(initialMapping);
         setData(json);
@@ -419,16 +459,83 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
         const rawName = String(row[columnMapping['fullName']] || '').trim();
         const rawLicenseNo = String(row[columnMapping['licenseNumber']] || '').trim();
         const category = String(row[columnMapping['category']] || 'LTV').trim();
-        const rawDept = String(
-          row[columnMapping['department']] || 
+        let rawDept = String(
+          (columnMapping['department'] && row[columnMapping['department']]) || 
           row['DEPARTMENT'] ||
           row['Department'] ||
           row['department'] ||
+          row['DEPARTMANT'] ||
+          row['Departmant'] ||
+          row['departmant'] ||
+          row['ONTACT SECTION'] ||
+          row['Ontact Section'] ||
+          row['ontact section'] ||
+          row['CONTACT SECTION'] ||
+          row['Contact Section'] ||
+          row['contact section'] ||
+          row['DISTRIBUTION DATE'] ||
+          row['Distribution Date'] ||
+          row['distribution date'] ||
+          row['DISTRIBUTION DAY'] ||
+          row['Distribution Day'] ||
+          row['distribution day'] ||
+          row['DISTRIBUTED DATE'] ||
+          row['Distributed Date'] ||
+          row['distributed date'] ||
+          row['DISTRIBUTED DAY'] ||
+          row['Distributed Day'] ||
+          row['distributed day'] ||
+          row['DIST DATE'] ||
+          row['Dist Date'] ||
+          row['dist date'] ||
+          row['DIST DAY'] ||
+          row['Dist Day'] ||
+          row['dist day'] ||
+          row['VISITING DATE'] ||
+          row['Visiting Date'] ||
+          row['visiting date'] ||
+          row['VISITING DAY'] ||
+          row['Visiting Day'] ||
+          row['visiting day'] ||
+          row['SECTION'] ||
+          row['Section'] ||
+          row['section'] ||
+          row['ONTACT'] ||
+          row['Ontact'] ||
+          row['ontact'] ||
+          row['CONTACT'] ||
+          row['Contact'] ||
+          row['contact'] ||
           row['DEPT'] ||
           row['Dept'] ||
           row['dept'] ||
           ''
         ).trim();
+
+        if (!rawDept) {
+          for (const [k, v] of Object.entries(row)) {
+            if (v !== undefined && v !== null && String(v).trim() !== '') {
+              const cleanK = k.toLowerCase().replace(/[\s_\-\/\.]/g, '');
+              if (
+                cleanK.includes('department') ||
+                cleanK.includes('departman') ||
+                cleanK.includes('ontactsection') ||
+                cleanK.includes('contactsection') ||
+                cleanK.includes('distributionday') ||
+                cleanK.includes('distributiondate') ||
+                cleanK.includes('distday') ||
+                cleanK.includes('distdate') ||
+                cleanK.includes('visitingdate') ||
+                cleanK.includes('visitingday') ||
+                cleanK === 'section' ||
+                cleanK === 'ontact'
+              ) {
+                rawDept = String(v).trim();
+                break;
+              }
+            }
+          }
+        }
         const oldCode = columnMapping['oldCode'] ? String(row[columnMapping['oldCode']] || '').trim() : '';
         const newCode = columnMapping['newCode'] ? String(row[columnMapping['newCode']] || '').trim() : '';
         const sn = columnMapping['sn'] && row[columnMapping['sn']] !== "" ? Number(row[columnMapping['sn']]) : (rowIdx + 1);
@@ -802,7 +909,7 @@ export default function ExcelUpload({ onUploadSuccess, theme = 'dark', fullWidth
                   { key: 'category', label: 'Category' },
                   { key: 'oldCode', label: 'Old Code' },
                   { key: 'newCode', label: 'New Code' },
-                  { key: 'department', label: 'Department' },
+                  { key: 'department', label: 'Department / Contact Section / Distribution Date/Day' },
                   { key: 'receivedBy', label: 'Received By' },
                   { key: 'distributedDate', label: 'Distributed Date' },
                   { key: 'distributedBy', label: 'Distributed By' },

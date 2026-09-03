@@ -1069,7 +1069,25 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             mapping['oldCode'] = col;
           } else if (norm.includes('newcode') || norm.includes('new')) {
             mapping['newCode'] = col;
-          } else if (norm.includes('department') || norm.includes('departmen') || norm.includes('dept')) {
+          } else if (
+            norm.includes('department') || 
+            norm.includes('departmen') || 
+            norm.includes('departmant') ||
+            norm.includes('dept') ||
+            norm.includes('ontactsection') ||
+            norm.includes('contactsection') ||
+            norm.includes('contactsec') ||
+            norm.includes('ontactsec') ||
+            norm.includes('distributionday') ||
+            norm.includes('distday') ||
+            norm.includes('distributiondate') ||
+            norm.includes('distdate') ||
+            norm.includes('visitingdate') ||
+            norm.includes('visitingday') ||
+            norm.includes('section') ||
+            norm.includes('ontact') ||
+            norm.includes('contact')
+          ) {
             mapping['department'] = col;
           } else if (norm.includes('received') || norm.includes('receiver') || norm.includes('receivedby')) {
             mapping['receivedBy'] = col;
@@ -1084,6 +1102,28 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             if (found) mapping[req] = found;
           }
         });
+
+        // Fallback matching for department / contact section / distribution date / distribution day
+        if (!mapping['department']) {
+          const deptFound = cols.find(c => {
+            const n = c.toLowerCase().replace(/[\s_\-\/\.]/g, '');
+            return (
+              n.includes('department') ||
+              n.includes('departmant') ||
+              n.includes('departmen') ||
+              n.includes('dept') ||
+              n.includes('ontact') ||
+              n.includes('contact') ||
+              n.includes('section') ||
+              n.includes('distributionday') ||
+              n.includes('distday') ||
+              n.includes('distributiondate') ||
+              n.includes('distdate') ||
+              n.includes('visiting')
+            );
+          });
+          if (deptFound) mapping['department'] = deptFound;
+        }
 
         const missing = requiredKeys.filter(k => !mapping[k]);
         if (missing.length > 0) {
@@ -1115,16 +1155,83 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
             const category = String(row[mapping['category']] || 'A').trim();
             const oldCode = String(row[mapping['oldCode']] || '').trim();
             const newCode = String(row[mapping['newCode']] || '').trim();
-            const rawDept = String(
-              row[mapping['department']] || 
+            let rawDept = String(
+              (mapping['department'] && row[mapping['department']]) || 
               row['DEPARTMENT'] ||
               row['Department'] ||
               row['department'] ||
+              row['DEPARTMANT'] ||
+              row['Departmant'] ||
+              row['departmant'] ||
+              row['ONTACT SECTION'] ||
+              row['Ontact Section'] ||
+              row['ontact section'] ||
+              row['CONTACT SECTION'] ||
+              row['Contact Section'] ||
+              row['contact section'] ||
+              row['DISTRIBUTION DATE'] ||
+              row['Distribution Date'] ||
+              row['distribution date'] ||
+              row['DISTRIBUTION DAY'] ||
+              row['Distribution Day'] ||
+              row['distribution day'] ||
+              row['DISTRIBUTED DATE'] ||
+              row['Distributed Date'] ||
+              row['distributed date'] ||
+              row['DISTRIBUTED DAY'] ||
+              row['Distributed Day'] ||
+              row['distributed day'] ||
+              row['DIST DATE'] ||
+              row['Dist Date'] ||
+              row['dist date'] ||
+              row['DIST DAY'] ||
+              row['Dist Day'] ||
+              row['dist day'] ||
+              row['VISITING DATE'] ||
+              row['Visiting Date'] ||
+              row['visiting date'] ||
+              row['VISITING DAY'] ||
+              row['Visiting Day'] ||
+              row['visiting day'] ||
+              row['SECTION'] ||
+              row['Section'] ||
+              row['section'] ||
+              row['ONTACT'] ||
+              row['Ontact'] ||
+              row['ontact'] ||
+              row['CONTACT'] ||
+              row['Contact'] ||
+              row['contact'] ||
               row['DEPT'] ||
               row['Dept'] ||
               row['dept'] ||
               ''
             ).trim();
+
+            if (!rawDept) {
+              for (const [k, v] of Object.entries(row)) {
+                if (v !== undefined && v !== null && String(v).trim() !== '') {
+                  const cleanK = k.toLowerCase().replace(/[\s_\-\/\.]/g, '');
+                  if (
+                    cleanK.includes('department') ||
+                    cleanK.includes('departman') ||
+                    cleanK.includes('ontactsection') ||
+                    cleanK.includes('contactsection') ||
+                    cleanK.includes('distributionday') ||
+                    cleanK.includes('distributiondate') ||
+                    cleanK.includes('distday') ||
+                    cleanK.includes('distdate') ||
+                    cleanK.includes('visitingdate') ||
+                    cleanK.includes('visitingday') ||
+                    cleanK === 'section' ||
+                    cleanK === 'ontact'
+                  ) {
+                    rawDept = String(v).trim();
+                    break;
+                  }
+                }
+              }
+            }
             const receivedBy = String(row[mapping['receivedBy']] || '').trim();
 
             const sn = row[mapping['sn']] ? Number(row[mapping['sn']]) : (j + 1);
@@ -2665,7 +2772,7 @@ export default function SettingsPanel({ currentSettings, onSettingsUpdate, curre
           lic.category || "LTV",
           lic.oldCode || "",
           lic.newCode || "",
-          lic.department || "",
+          lic.department || lic.departmant || lic['ONTACT SECTION'] || lic['CONTACT SECTION'] || lic['DISTRIBUTION DATE'] || lic['DISTRIBUTION DAY'] || lic.contactSection || lic.distributionDay || lic.distributionDate || "",
           lic.receivedBy || "",
           lic.status || "available"
         ])

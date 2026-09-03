@@ -8,9 +8,9 @@ import { auth } from '../firebase';
 import { getLicenseById, getLicenseByLicenseNumber, incrementSearchesServed, createCollectionRequest, createOrUpdateLicense, getAllUserRoles, resolveStaffName, isLicenseDistributed } from '../dbService';
 import { License, CollectionRequest, AppRole } from '../types';
 import { sanitizeInputString, sanitizeErrorMessage, checkRateLimit } from '../utils/securitySanitizer';
-import { Search, Calendar, Phone, Clipboard, CheckCircle, Clock, AlertCircle, HelpCircle, FileText, Send, User, MapPin, ShieldCheck } from 'lucide-react';
+import { Search, Calendar, Phone, Clipboard, CheckCircle, Clock, AlertCircle, HelpCircle, FileText, Send, User, MapPin, ShieldCheck, Edit3, Check, X } from 'lucide-react';
 import { registryDataStore } from '../registryDataStore';
-import { convertADToBS } from '../utils/dateConverter';
+import { convertADToBS, toDevanagariNumeral } from '../utils/dateConverter';
 
 export function extractDepartmentValue(lic: any): string {
   if (!lic) return '';
@@ -21,9 +21,96 @@ export function extractDepartmentValue(lic: any): string {
     lic.department ||
     lic.Department ||
     lic.DEPARTMENT ||
+    lic.departmant ||
+    lic.Departmant ||
+    lic.DEPARTMANT ||
+    lic.contactSection ||
+    lic['CONTACT SECTION'] ||
+    lic['Contact Section'] ||
+    lic['contact section'] ||
+    lic['contact_section'] ||
+    lic.ontactSection ||
+    lic['ONTACT SECTION'] ||
+    lic['Ontact Section'] ||
+    lic['ontact section'] ||
+    lic['ontact_section'] ||
+    lic.distributionDay ||
+    lic['DISTRIBUTION DAY'] ||
+    lic['Distribution Day'] ||
+    lic['distribution day'] ||
+    lic['distribution_day'] ||
+    lic.distDay ||
+    lic['DIST DAY'] ||
+    lic['Dist Day'] ||
+    lic['dist day'] ||
+    lic.distributionDate ||
+    lic['DISTRIBUTION DATE'] ||
+    lic['Distribution Date'] ||
+    lic['distribution date'] ||
+    lic['distribution_date'] ||
+    lic.distDate ||
+    lic['DIST DATE'] ||
+    lic['Dist Date'] ||
+    lic['dist date'] ||
+    lic.visitingDay ||
+    lic['VISITING DAY'] ||
+    lic['Visiting Day'] ||
+    lic['visiting day'] ||
+    lic.visitingDate ||
+    lic['VISITING DATE'] ||
+    lic['Visiting Date'] ||
+    lic['visiting date'] ||
+    lic.distributedDate ||
+    lic['DISTRIBUTED DATE'] ||
+    lic['Distributed Date'] ||
+    lic['distributed date'] ||
+    lic['distributed_date'] ||
+    lic.distributedDay ||
+    lic['DISTRIBUTED DAY'] ||
+    lic['Distributed Day'] ||
+    lic['distributed day'] ||
+    lic['distributed_day'] ||
+    lic.section ||
+    lic.Section ||
+    lic.SECTION ||
+    lic.contact ||
+    lic.Contact ||
+    lic.CONTACT ||
+    lic.ontact ||
+    lic.Ontact ||
+    lic.ONTACT ||
+    lic.dept ||
+    lic.Dept ||
+    lic.DEPT ||
     ''
   );
-  return String(candidate || '').trim();
+  if (candidate && String(candidate).trim()) return String(candidate).trim();
+
+  // Dynamic fallback scanning all properties
+  for (const [k, v] of Object.entries(lic)) {
+    if (v !== undefined && v !== null && typeof v === 'string' && v.trim()) {
+      const cleanK = k.toLowerCase().replace(/[\s_\-\/\.]/g, '');
+      if (
+        cleanK.includes('department') ||
+        cleanK.includes('departman') ||
+        cleanK.includes('ontactsection') ||
+        cleanK.includes('contactsection') ||
+        cleanK.includes('distributionday') ||
+        cleanK.includes('distributiondate') ||
+        cleanK.includes('distday') ||
+        cleanK.includes('distdate') ||
+        cleanK.includes('visitingdate') ||
+        cleanK.includes('visitingday') ||
+        cleanK === 'section' ||
+        cleanK === 'contact' ||
+        cleanK === 'ontact'
+      ) {
+        return v.trim();
+      }
+    }
+  }
+
+  return '';
 }
 
 function getDepartmentDisplay(valOrLic: any): string {
@@ -162,6 +249,34 @@ export default function PublicSearch({
   
   // Custom receiver/collector name state for the direct available action box
   const [collectorName, setCollectorName] = useState('');
+
+  // Department quick edit states (Office users only)
+  const [isEditingDepartment, setIsEditingDepartment] = useState(false);
+  const [editDepartmentValue, setEditDepartmentValue] = useState('');
+  const [savingDepartment, setSavingDepartment] = useState(false);
+
+  const handleSaveDepartment = async () => {
+    if (!licenseMatch) return;
+    setSavingDepartment(true);
+    try {
+      const updatedDept = editDepartmentValue.trim();
+      const updated: License = {
+        ...licenseMatch,
+        department: updatedDept,
+        updatedAt: new Date().toISOString(),
+        updatedBy: userEmail || 'staff'
+      };
+      await createOrUpdateLicense(licenseMatch.id, updated);
+      setLicenseMatch(updated);
+      setIsEditingDepartment(false);
+      setSuccessNotification("Department updated successfully!");
+      setTimeout(() => setSuccessNotification(null), 4000);
+    } catch (err: any) {
+      alert("Failed to update department: " + err.message);
+    } finally {
+      setSavingDepartment(false);
+    }
+  };
 
   // Submitted Documents states
   const [showDocsModal, setShowDocsModal] = useState(false);
@@ -382,9 +497,14 @@ export default function PublicSearch({
       // Query Firestore directly using indexed equality query via centralized engine
       const searchRes = await searchLicenseBySmartIdentifier(rawQuery);
 
-      if (!searchRes.success && searchRes.error) {
-        setSearchError(searchRes.error);
-        setSearched(true);
+      if (!searchRes.success) {
+        if (searchRes.classification?.type === 'INVALID') {
+          setSearchError(searchRes.error || "कृपया सही ढाँचा प्रविष्ट गर्नुहोस्");
+          setSearched(false);
+        } else {
+          setSearchError('');
+          setSearched(true);
+        }
         setLicenseMatch(null);
         return;
       }
@@ -414,7 +534,7 @@ export default function PublicSearch({
 
       onSearchExecuted();
     } catch (err: any) {
-      alert(sanitizeErrorMessage(err, "Unable to perform search at this moment. Please check your network connection."));
+      console.warn("Public search notice:", err);
     } finally {
       setSearching(false);
     }
@@ -570,7 +690,7 @@ export default function PublicSearch({
       </div>
 
       {/* 12-Digit validation message */}
-      {searchError && (
+      {searchError && !searchError.toLowerCase().includes('quota') && !searchError.toLowerCase().includes('resource') && (
         <div className={`p-3 xs:p-3.5 sm:p-6 rounded-xl sm:rounded-3xl border transition-all animate-fade-in ${
           theme === 'dark' 
             ? 'bg-red-955/30 border-red-900/50 text-red-100 shadow-lg shadow-black/30' 
@@ -596,13 +716,13 @@ export default function PublicSearch({
             /* ======================================================== */
             /* CASE B: LICENSE ALREADY DISTRIBUTED (READ-ONLY REPORT CARD) */
             /* ======================================================== */
-            <div className={`rounded-xl sm:rounded-3xl border-2 shadow-2xl p-4 sm:p-6 space-y-4 animate-fade-in transition-all duration-300 max-w-3xl mx-auto ${
+            <div className={`rounded-2xl sm:rounded-3xl border shadow-xl p-5 sm:p-8 space-y-6 animate-fade-in transition-all duration-300 max-w-3xl mx-auto ${
               theme === 'dark'
                 ? 'bg-[#0f172a] border-emerald-500/40 text-slate-100'
-                : 'bg-white border-emerald-600 text-slate-900 shadow-emerald-500/10'
+                : 'bg-white border-emerald-600/60 text-slate-900 shadow-emerald-500/10'
             }`}>
               {/* Header Status Banner */}
-              <div className={`p-3.5 sm:p-4 rounded-xl sm:rounded-2xl border text-center space-y-1 ${
+              <div className={`p-4 rounded-xl sm:rounded-2xl border text-center space-y-1 ${
                 theme === 'dark'
                   ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-300'
                   : 'bg-emerald-50 border-emerald-200 text-emerald-900'
@@ -618,101 +738,97 @@ export default function PublicSearch({
                 </p>
               </div>
 
-              {/* Compact Read-Only Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                {/* 1. LICENSE NUMBER */}
-                <div className={`p-3 rounded-xl border ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    LICENSE NUMBER (लाइसेन्स नं.)
+              {/* Serial Plain Text Details Container (Picture 2 Reference Layout) */}
+              <div className={`p-5 sm:p-7 rounded-2xl border divide-y ${
+                theme === 'dark'
+                  ? 'bg-slate-950/50 border-slate-800 divide-slate-800/80 text-slate-200'
+                  : 'bg-slate-50/70 border-slate-200 divide-slate-200/90 text-slate-800'
+              } space-y-3.5 sm:space-y-4 font-sans`}>
+                {/* 1. APPLICANT ID */}
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-1">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    APPLICANT ID :
                   </span>
-                  <span className="block font-mono text-sm sm:text-base font-black text-blue-600 dark:text-cyan-400 mt-0.5">
-                    {licenseMatch.licenseNumber}
-                  </span>
-                </div>
-
-                {/* 2. LICENSE HOLDER */}
-                <div className={`p-3 rounded-xl border ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    LICENSE HOLDER (सवारी चालक)
-                  </span>
-                  <span className="block text-sm sm:text-base font-black uppercase text-slate-900 dark:text-slate-100 mt-0.5">
-                    {licenseMatch.fullName}
-                  </span>
-                </div>
-
-                {/* 3. APPLICANT ID */}
-                <div className={`p-3 rounded-xl border ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    APPLICANT ID
-                  </span>
-                  <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200 mt-0.5">
+                  <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
                     {licenseMatch.applicantId || '---'}
                   </span>
                 </div>
 
-                {/* 4. CATEGORY */}
-                <div className={`p-3 rounded-xl border ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    CATEGORY (वर्ग)
+                {/* 2. LICENSE NUMBER */}
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    LICENSE NUMBER :
                   </span>
-                  <span className="block text-xs sm:text-sm font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  <span className="text-sm sm:text-base font-black font-mono text-blue-600 dark:text-blue-400">
+                    {licenseMatch.licenseNumber || '---'}
+                  </span>
+                </div>
+
+                {/* 3. FULL NAME */}
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    FULL NAME :
+                  </span>
+                  <span className="text-sm sm:text-base font-black uppercase text-slate-900 dark:text-slate-100">
+                    {licenseMatch.fullName || '---'}
+                  </span>
+                </div>
+
+                {/* 4. CATEGORY */}
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    CATEGORY :
+                  </span>
+                  <span className="text-sm sm:text-base font-black text-red-600 dark:text-red-400">
                     {licenseMatch.category || '---'}
                   </span>
                 </div>
 
-                {/* 5. RECIPIENT / RECEIVED BY */}
-                <div className={`p-3 rounded-xl border sm:col-span-2 ${
-                  theme === 'dark' ? 'bg-emerald-950/30 border-emerald-800/60' : 'bg-emerald-50/70 border-emerald-300'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                    RECIPIENT / RECEIVER NAME (बुझिलिने व्यक्ति)
+                {/* 5. RECIPIENT NAME */}
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    RECIPIENT NAME :
                   </span>
-                  <span className="block text-sm sm:text-base font-black text-emerald-800 dark:text-emerald-300 mt-0.5">
+                  <span className="text-sm sm:text-base font-black text-slate-900 dark:text-slate-100">
                     {licenseMatch.receivedBy || licenseMatch.submittedDocsReceiverName || '---'}
                   </span>
                 </div>
 
                 {/* 6. DISTRIBUTED BY */}
-                <div className={`p-3 rounded-xl border ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    DISTRIBUTED BY (बुझाउने कर्मचारी)
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    DISTRIBUTED BY :
                   </span>
-                  <span className="block text-xs sm:text-sm font-black uppercase text-indigo-700 dark:text-cyan-400 mt-0.5">
+                  <span className="text-sm sm:text-base font-black uppercase text-indigo-700 dark:text-indigo-400">
                     {licenseMatch.distributedByStaffName || resolveOperatorName(licenseMatch.updatedBy || '') || licenseMatch.distributedBy || 'Public Handover Desk'}
                   </span>
                 </div>
 
                 {/* 7. DISTRIBUTION DATE */}
-                <div className={`p-3 rounded-xl border ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    DISTRIBUTION DATE (वितरण मिति)
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    DISTRIBUTION DATE :
                   </span>
-                  <span className="block text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200 mt-0.5">
-                    {licenseMatch.distributedDate || licenseMatch.submittedDocsSavedDate || (licenseMatch.updatedAt ? convertADToBS(licenseMatch.updatedAt) : '---')}
-                    {licenseMatch.submittedDocsSavedTime ? ` [${licenseMatch.submittedDocsSavedTime}]` : ''}
+                  <span className="text-sm sm:text-base font-black text-slate-900 dark:text-slate-100">
+                    {(() => {
+                      const rawDate = licenseMatch.distributedDate || licenseMatch.submittedDocsSavedDate || licenseMatch.updatedAt;
+                      const bsDate = rawDate ? convertADToBS(rawDate) : '---';
+                      return (
+                        <span>
+                          {bsDate}
+                          {licenseMatch.submittedDocsSavedTime ? ` [${licenseMatch.submittedDocsSavedTime}]` : ''}
+                        </span>
+                      );
+                    })()}
                   </span>
                 </div>
 
                 {/* 8. SUBMITTED DOCUMENTS */}
-                <div className={`p-3 rounded-xl border sm:col-span-2 ${
-                  theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="block text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    SUBMITTED DOCUMENTS (पेस गरिएका कागजातहरू)
+                <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 pt-3.5 sm:pt-4">
+                  <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-slate-900 dark:text-slate-100 min-w-[200px] shrink-0">
+                    SUBMITTED DOCUMENTS :
                   </span>
-                  <span className="block text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-200 mt-0.5">
+                  <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
                     {licenseMatch.submittedDocs && licenseMatch.submittedDocs.length > 0
                       ? licenseMatch.submittedDocs.join(', ')
                       : 'None'}
@@ -896,13 +1012,70 @@ export default function PublicSearch({
                     }`}>
                       DEPARTMENT
                     </span>
-                    <span className={`block tracking-wide ${
-                      theme === 'dark' 
-                        ? 'text-purple-400 font-black text-sm xs:text-base sm:text-lg' 
-                        : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
-                    }`}>
-                      {getDepartmentDisplay(licenseMatch)}
-                    </span>
+                    {isEditingDepartment ? (
+                      <div className="flex items-center gap-1.5 mt-0.5 w-full max-w-[240px]">
+                        <input
+                          type="text"
+                          value={editDepartmentValue}
+                          onChange={(e) => setEditDepartmentValue(e.target.value)}
+                          placeholder="Enter Department / Section"
+                          className={`w-full px-2 py-1 text-xs rounded border text-center font-bold ${
+                            theme === 'dark'
+                              ? 'bg-slate-900 border-purple-500 text-purple-300 focus:outline-hidden'
+                              : 'bg-white border-blue-600 text-blue-800 focus:outline-hidden'
+                          }`}
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveDepartment();
+                            if (e.key === 'Escape') setIsEditingDepartment(false);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveDepartment}
+                          disabled={savingDepartment}
+                          className="p-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer shadow-xs"
+                          title="Save Department"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingDepartment(false)}
+                          className="p-1.5 rounded-lg bg-slate-500 text-white hover:bg-slate-600 cursor-pointer shadow-xs"
+                          title="Cancel"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center gap-1.5">
+                        <span className={`block tracking-wide ${
+                          theme === 'dark' 
+                            ? 'text-purple-400 font-black text-sm xs:text-base sm:text-lg' 
+                            : 'text-blue-600 font-black text-sm xs:text-base sm:text-lg'
+                        }`}>
+                          {getDepartmentDisplay(licenseMatch)}
+                        </span>
+                        {isOfficeUser && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditDepartmentValue(extractDepartmentValue(licenseMatch));
+                              setIsEditingDepartment(true);
+                            }}
+                            className={`p-1 rounded-md transition-colors cursor-pointer ${
+                              theme === 'dark'
+                                ? 'text-slate-400 hover:text-purple-300 hover:bg-purple-950/40'
+                                : 'text-slate-600 hover:text-blue-700 hover:bg-blue-100/60'
+                            }`}
+                            title="Edit / Set Department"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 

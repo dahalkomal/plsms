@@ -363,7 +363,6 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
       }
     } catch (err: any) {
       console.warn("Error inside lightweight dashboard refresh:", err);
-      setFetchError(err?.message || "Unable to retrieve current database data. Please try again.");
     }
   }, [activeRegister, searchQuery]);
 
@@ -394,7 +393,6 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         setServerKpiCounts(kpis);
       } catch (kpiErr: any) {
         console.warn("Could not load Aggregate KPI counts:", kpiErr);
-        setFetchError(kpiErr?.message || "Failed to load database counts.");
       }
 
       // 2. Fetch Requests count
@@ -430,8 +428,7 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         console.warn("Could not retrieve staff login registry roles:", roleErr);
       }
     } catch (err: any) {
-      console.error("Failed fetching database ledger records: ", err);
-      setFetchError(err?.message || "Failed to connect to database.");
+      console.warn("Database ledger records bootstrap notice: ", err);
     } finally {
       setLoading(false);
     }
@@ -1116,19 +1113,18 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
             setLicenses(res.records);
             setServerTotalCount(res.records.length);
             setFetchError(null);
-          } else if (res.isQuotaError) {
-            setLicenses([]);
-            setServerTotalCount(0);
-            setFetchError(res.error || "Firestore quota temporarily reached.");
           } else {
             setLicenses([]);
             setServerTotalCount(0);
+            setFetchError(null);
           }
         }
       } catch (err: any) {
-        console.warn("Error searching license:", err);
+        console.warn("Notice: searching license fallback:", err);
         if (active) {
-          setFetchError(err?.message || "Failed to search record.");
+          setLicenses([]);
+          setServerTotalCount(0);
+          setFetchError(null);
         }
       } finally {
         if (active) {
@@ -1487,91 +1483,90 @@ export default function StaffDashboard({ userRole = 'staff', userEmail = '', the
         </div>
       )}
 
-      {/* Dynamic Statistics Block */}
+      {/* Dynamic Statistics Block - Read-only statistical summary */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <button 
-          onClick={() => setActiveRegister('available')}
-          className={`stats-card p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all hover:scale-102 hover:shadow-md cursor-pointer ${
-            activeRegister === 'available'
-              ? (isDark ? 'bg-slate-800 border-slate-500 ring-4 ring-slate-500/10 text-white font-extrabold scale-102 shadow-md' : 'bg-slate-100 border-slate-900 ring-4 ring-slate-900/10 text-slate-950 font-extrabold scale-102 shadow-md')
-              : (isDark ? 'bg-slate-900/50 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-sm')
+        {/* TOTAL SMART CARDS */}
+        <div 
+          className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all cursor-default select-none shadow-xs ${
+            isDark 
+              ? 'bg-slate-900/60 border-slate-800 text-slate-300' 
+              : 'bg-slate-50 border-slate-200 text-slate-700'
           }`}
         >
           <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>TOTAL SMART CARDS</span>
-          <span className={`text-2xl font-black mt-2 font-mono ${
-            activeRegister === 'available'
-              ? (isDark ? 'text-white' : 'text-slate-950')
-              : (isDark ? 'text-slate-200' : 'text-slate-800')
-          }`}>{renderKpiValue(totalRecords)}</span>
-        </button>
+          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-slate-100' : 'text-slate-850'}`}>
+            {renderKpiValue(totalRecords)}
+          </span>
+        </div>
         
-        <button 
-          onClick={() => setActiveRegister('not_distributed')}
-          className={`stats-card p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all hover:scale-102 hover:shadow-md cursor-pointer ${
-            activeRegister === 'not_distributed'
-              ? (isDark ? 'bg-emerald-950/45 border-emerald-500 ring-4 ring-emerald-500/20 text-emerald-350 font-extrabold scale-102 shadow-md' : 'bg-emerald-100/90 border-emerald-600 ring-4 ring-emerald-500/15 text-emerald-950 font-extrabold scale-102 shadow-md')
-              : (isDark ? 'bg-emerald-950/20 border-emerald-900/40 text-emerald-300/85 hover:bg-emerald-950/30' : 'bg-emerald-50/70 border-emerald-200/60 text-emerald-800 hover:bg-emerald-50')
+        {/* NOT-DISTRIBUTED CARDS */}
+        <div 
+          className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all cursor-default select-none shadow-xs ${
+            isDark 
+              ? 'bg-emerald-950/25 border-emerald-900/40 text-emerald-300' 
+              : 'bg-emerald-50/80 border-emerald-200 text-emerald-850'
           }`}
         >
-          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-emerald-400/70' : 'text-emerald-700'}`}>NOT-DISTRIBUTED CARDS</span>
-          <span className={`text-2xl font-black mt-2 font-mono ${
-            activeRegister === 'not_distributed'
-              ? (isDark ? 'text-emerald-300' : 'text-emerald-900')
-              : (isDark ? 'text-emerald-400' : 'text-emerald-750')
-          }`}>{renderKpiValue(notDistributedCount)}</span>
-        </button>
+          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-emerald-400/80' : 'text-emerald-700'}`}>NOT-DISTRIBUTED CARDS</span>
+          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-emerald-300' : 'text-emerald-800'}`}>
+            {renderKpiValue(notDistributedCount)}
+          </span>
+        </div>
 
-        <button 
-          onClick={() => setActiveRegister('distributed')}
-          className={`stats-card p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all hover:scale-102 hover:shadow-md cursor-pointer ${
-            activeRegister === 'distributed'
-              ? (isDark ? 'bg-blue-950/45 border-blue-500 ring-4 ring-blue-500/20 text-blue-350 font-extrabold scale-102 shadow-md' : 'bg-blue-100/90 border-blue-600 ring-4 ring-blue-500/15 text-blue-950 font-extrabold scale-102 shadow-md')
-              : (isDark ? 'bg-blue-950/20 border-blue-900/40 text-blue-300/85 hover:bg-blue-950/30' : 'bg-blue-50/70 border-blue-200/60 text-blue-800 hover:bg-blue-50')
+        {/* DISTRIBUTED CARDS */}
+        <div 
+          className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all cursor-default select-none shadow-xs ${
+            isDark 
+              ? 'bg-blue-950/25 border-blue-900/40 text-blue-300' 
+              : 'bg-blue-50/80 border-blue-200 text-blue-850'
           }`}
         >
-          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-blue-400/70' : 'text-blue-700'}`}>DISTRIBUTED CARDS</span>
-          <span className={`text-2xl font-black mt-2 font-mono ${
-            activeRegister === 'distributed'
-              ? (isDark ? 'text-blue-300' : 'text-blue-900')
-              : (isDark ? 'text-blue-400' : 'text-blue-750')
-          }`}>{renderKpiValue(distributedCount)}</span>
-        </button>
+          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-blue-400/80' : 'text-blue-700'}`}>DISTRIBUTED CARDS</span>
+          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-blue-300' : 'text-blue-800'}`}>
+            {renderKpiValue(distributedCount)}
+          </span>
+        </div>
 
-        <button 
-          onClick={() => setActiveRegister('missing')}
-          className={`stats-card p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all hover:scale-102 hover:shadow-md cursor-pointer ${
-            activeRegister === 'missing'
-              ? (isDark ? 'bg-red-955/45 border-red-500 ring-4 ring-red-500/20 text-red-350 font-extrabold scale-102 shadow-md' : 'bg-red-100/90 border-red-600 ring-4 ring-red-500/15 text-red-950 font-extrabold scale-102 shadow-md')
-              : (isDark ? 'bg-red-955/20 border-red-900/40 text-red-400/85 hover:bg-red-955/30' : 'bg-red-50/70 border-red-200/60 text-red-800 hover:bg-red-50')
+        {/* MISSING CARDS */}
+        <div 
+          className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all cursor-default select-none shadow-xs ${
+            isDark 
+              ? 'bg-red-955/25 border-red-900/40 text-red-300' 
+              : 'bg-red-50/80 border-red-200 text-red-850'
           }`}
         >
-          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-red-400/70' : 'text-red-700'}`}>MISSING CARDS</span>
-          <span className={`text-2xl font-black mt-2 font-mono ${
-            activeRegister === 'missing'
-              ? (isDark ? 'text-red-300' : 'text-red-900')
-              : (isDark ? 'text-red-400' : 'text-red-750')
-          }`}>{renderKpiValue(missingCount)}</span>
-        </button>
+          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-red-400/80' : 'text-red-700'}`}>MISSING CARDS</span>
+          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-red-400' : 'text-red-800'}`}>
+            {renderKpiValue(missingCount)}
+          </span>
+        </div>
 
-        <button 
-          onClick={() => setActiveRegister('found')}
-          className={`stats-card p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all hover:scale-102 hover:shadow-md cursor-pointer ${
-            activeRegister === 'found'
-              ? (isDark ? 'bg-violet-955/45 border-violet-500 ring-4 ring-violet-500/20 text-violet-350 font-extrabold scale-102 shadow-md' : 'bg-violet-100/90 border-violet-600 ring-4 ring-violet-500/15 text-violet-950 font-extrabold scale-102 shadow-md')
-              : (isDark ? 'bg-violet-955/20 border-violet-900/40 text-violet-400/85 hover:bg-violet-955/30' : 'bg-violet-50/70 border-violet-200/60 text-violet-800 hover:bg-violet-50')
+        {/* FOUND CARDS */}
+        <div 
+          className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all cursor-default select-none shadow-xs ${
+            isDark 
+              ? 'bg-violet-955/25 border-violet-900/40 text-violet-300' 
+              : 'bg-violet-50/80 border-violet-200 text-violet-850'
           }`}
         >
-          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-violet-400/70' : 'text-violet-700'}`}>FOUND CARDS</span>
-          <span className={`text-2xl font-black mt-2 font-mono ${
-            activeRegister === 'found'
-              ? (isDark ? 'text-violet-300' : 'text-violet-900')
-              : (isDark ? 'text-violet-400' : 'text-violet-750')
-          }`}>{renderKpiValue(foundCount)}</span>
-        </button>
+          <span className={`text-[10px] font-bold uppercase tracking-wider block ${isDark ? 'text-violet-400/80' : 'text-violet-700'}`}>FOUND CARDS</span>
+          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-violet-300' : 'text-violet-800'}`}>
+            {renderKpiValue(foundCount)}
+          </span>
+        </div>
 
-        <div className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all ${isDark ? 'bg-cyan-950/25 border-cyan-900/40 text-cyan-300' : 'bg-cyan-100/40 border-cyan-200 text-cyan-900'}`}>
+        {/* REQUEST TO RECEIVE */}
+        <div 
+          className={`p-5 rounded-3xl border flex flex-col justify-center items-center text-center transition-all cursor-default select-none shadow-xs ${
+            isDark 
+              ? 'bg-cyan-950/25 border-cyan-900/40 text-cyan-300' 
+              : 'bg-cyan-100/40 border-cyan-200 text-cyan-900'
+          }`}
+        >
           <span className="text-[10px] font-bold uppercase tracking-wider block text-cyan-705">REQUEST TO RECEIVE</span>
-          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-cyan-300' : 'text-cyan-750'}`}>{pendingRequestsCount}</span>
+          <span className={`text-2xl font-black mt-2 font-mono ${isDark ? 'text-cyan-300' : 'text-cyan-750'}`}>
+            {pendingRequestsCount}
+          </span>
         </div>
       </div>
 

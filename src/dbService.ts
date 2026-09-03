@@ -913,8 +913,11 @@ export async function getDashboardKpiCounts(forceRefresh: boolean = false): Prom
                 return res;
               }
             }
-          } catch (docErr) {
+          } catch (docErr: any) {
             console.warn("Persistent KPI summary check notice:", docErr);
+            if (isQuotaOrMemoryError(docErr)) {
+              throw docErr;
+            }
           }
         }
 
@@ -1275,26 +1278,13 @@ export async function createOrUpdateLicense(id: string, license: License): Promi
     };
   }
 
-  // 1. Write directly to persistent Cloud Firestore
-  try {
-    const cleanDoc = sanitizeFirestoreData(updatedLicense);
-    const docRef = doc(db, 'licenses', id);
-    await setDoc(docRef, cleanDoc);
-    invalidateDashboardKpiCache();
-    invalidateAlphabeticalSummaryCache();
-  } catch (error) {
-    console.warn("Could not write license to Cloud Firestore permanently: ", error);
-    checkAndTriggerQuotaError(error);
-    throw error;
-  }
-
-  // 2. Synchronize memory registryDataStore immediately via updateRecord / addRecord
+  // 1. Synchronize memory registryDataStore immediately so UI and distribution workflow succeeds
   const updatedInStore = registryDataStore.updateRecord(id, updatedLicense);
   if (!updatedInStore) {
     registryDataStore.addRecord(updatedLicense);
   }
 
-  // 3. Keep mock localStorage in sync if present
+  // 2. Keep local storage backup in sync
   try {
     const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', []);
     if (storageRecords && storageRecords.length > 0) {
@@ -1307,7 +1297,22 @@ export async function createOrUpdateLicense(id: string, license: License): Promi
       writeStorageItem('plsms_mock_licenses', storageRecords);
     }
   } catch (e) {
-    console.warn("Error updating mock storage item:", e);
+    console.warn("Error updating local storage item:", e);
+  }
+
+  // 3. Write directly to persistent Cloud Firestore
+  try {
+    const cleanDoc = sanitizeFirestoreData(updatedLicense);
+    const docRef = doc(db, 'licenses', id);
+    await setDoc(docRef, cleanDoc);
+    invalidateDashboardKpiCache();
+    invalidateAlphabeticalSummaryCache();
+  } catch (error: any) {
+    console.warn("Could not write license to Cloud Firestore permanently: ", error);
+    checkAndTriggerQuotaError(error);
+    if (!isQuotaOrMemoryError(error)) {
+      throw error;
+    }
   }
 }
 

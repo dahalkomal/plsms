@@ -14,62 +14,7 @@ import SettingsPanel from './components/SettingsPanel';
 import DevSwitcher from './components/DevSwitcher';
 import { PageHeader, PageTitleProvider } from './components/PageHeader';
 import { Shield, Sparkles, LogIn, LogOut, Search, Volume2, Calendar, Settings, Mail, Phone, HelpCircle, MapPin, LayoutDashboard, Database, Sun, Moon, Eye, EyeOff, Key, AlertCircle, CheckCircle, QrCode, Printer, Download, Copy, X, Users, Lock } from 'lucide-react';
-import { convertADToBS } from './utils/dateConverter';
-
-// Formatter helper for Nepali Date & Time
-function getFormattedNepaliDateTime(date: Date) {
-  const nepaliDays = ['आइतबार', 'सोमबार', 'मङ्गलबार', 'बुधबार', 'बिहीबार', 'शुक्रबार', 'शनिबार'];
-  const nepaliMonths = [
-    'बैशाख', 'जेठ', 'असार', 'साउन', 'भदौ', 'असोज', 
-    'कात्तिक', 'मङ्सिर', 'पुस', 'माघ', 'फागुन', 'चैत'
-  ];
-  const nepaliDigits = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
-  
-  const toNpDigits = (num: number | string): string => {
-    return String(num).split('').map(char => {
-      const digit = parseInt(char, 10);
-      return isNaN(digit) ? char : nepaliDigits[digit];
-    }).join('');
-  };
-
-  const dayName = nepaliDays[date.getDay()];
-  
-  let bsDateStr = '२०८३-०३-२९';
-  try {
-    bsDateStr = convertADToBS(date);
-  } catch (e) {
-    console.error("BS conversion failed", e);
-  }
-  
-  const [yearStr, monthStr, dayStr] = bsDateStr.split('-');
-  const monthVal = parseInt(monthStr, 10) || 1;
-  const dayVal = parseInt(dayStr, 10) || 1;
-  
-  const monthName = nepaliMonths[monthVal - 1] || 'बैशाख';
-  const formattedDate = `${dayName} ${toNpDigits(dayVal)} ${monthName} ${toNpDigits(yearStr)}`;
-  
-  // Format Time
-  let hours = date.getHours();
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  
-  let ampm = 'बिहान';
-  if (hours >= 12) {
-    if (hours < 16) ampm = 'दिउँसो';
-    else if (hours < 20) ampm = 'साँझ';
-    else ampm = 'राती';
-  } else {
-    if (hours < 4 || hours >= 20) ampm = 'राती';
-  }
-  
-  const displayHours = hours % 12 || 12;
-  const formattedTime = `${toNpDigits(String(displayHours).padStart(2, '0'))}:${toNpDigits(minutes)}:${toNpDigits(seconds)} ${ampm}`;
-  
-  return {
-    dateStr: formattedDate,
-    timeStr: formattedTime
-  };
-}
+import { convertADToBS, getFormattedNepaliDateTime } from './utils/dateConverter';
 
 const NepaliClockWidget: React.FC = React.memo(() => {
   const [time, setTime] = useState(() => new Date());
