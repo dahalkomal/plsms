@@ -3480,7 +3480,7 @@ export async function getAlphabeticalSummary(
 ): Promise<AlphabeticalSummaryResult> {
   const isDateFiltered = Boolean((startDateBS && startDateBS.trim()) || (endDateBS && endDateBS.trim()));
 
-  // If no date filter is applied and cached result is fresh (< 5 min), return cached summary
+  // If no date filter is applied and cached result is fresh (< 5 min), return cached summary immediately
   if (!isDateFiltered && !forceRefresh && cachedAlphabeticalSummary) {
     const ageMs = Date.now() - cachedAlphabeticalSummary.timestamp;
     if (ageMs < 5 * 60 * 1000) {
@@ -3492,174 +3492,137 @@ export async function getAlphabeticalSummary(
     return alphabeticalSummaryPromise;
   }
 
+  // 100% ZERO DATABASE READS ENGINE:
+  // Aggregates directly from in-memory RegistryDataStore, client-side session cache, and local storage snapshot.
+  // Never issues reads, queries, or transactions against Cloud Firestore, completely avoiding any quota impact.
   const calculationPromise = (async () => {
     const alphabets = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
 
-    if (providedLicenses && Array.isArray(providedLicenses) && providedLicenses.length > 500) {
-      const statsMap: Record<string, { count: number; distributed: number; missing: number; found: number }> = {};
-      alphabets.forEach(alpha => {
-        statsMap[alpha] = { count: 0, distributed: 0, missing: 0, found: 0 };
-      });
+    // Gather candidate records from all available local datasets
+    const storeRecords = registryDataStore.getRecords();
+    const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
+    const backupRecords = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
+    
+    // Deduplicate records across in-memory registry and local backups
+    const combinedMap = new Map<string, License>();
+    const candidateLists = [
+      providedLicenses || [],
+      storeRecords,
+      backupRecords,
+      storageRecords
+    ];
 
-      let otherCount = 0;
-      let otherDistributed = 0;
-      let overallTotal = 0;
-      let overallDistributed = 0;
-
-      providedLicenses.forEach(lic => {
-        if (!lic) return;
-        overallTotal++;
-        const isDist = lic.status === 'distributed' || isLicenseDistributed(lic);
-        if (isDist) overallDistributed++;
-
-        const clean = (lic.fullName || '').replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').trim().toUpperCase();
-        const firstChar = clean.length > 0 ? clean.charAt(0) : '';
-
-        if (firstChar >= 'A' && firstChar <= 'Z') {
-          statsMap[firstChar].count++;
-          if (isDist) statsMap[firstChar].distributed++;
-        } else {
-          otherCount++;
-          if (isDist) otherDistributed++;
-        }
-      });
-
-      const stats: AlphabetStat[] = alphabets.map(alpha => ({
-        alphabet: alpha,
-        count: statsMap[alpha].count,
-        distributed: statsMap[alpha].distributed,
-        remained: Math.max(0, statsMap[alpha].count - statsMap[alpha].distributed)
-      }));
-
-      stats.push({
-        alphabet: 'OTHERS / अन्य',
-        count: otherCount,
-        distributed: otherDistributed,
-        remained: Math.max(0, otherCount - otherDistributed)
-      });
-
-      const result: AlphabeticalSummaryResult = {
-        alphabetStats: stats,
-        totalCount: overallTotal,
-        totalDistributed: overallDistributed,
-        totalRemained: Math.max(0, overallTotal - overallDistributed)
-      };
-
-      if (!isDateFiltered) {
-        cachedAlphabeticalSummary = { data: result, timestamp: Date.now() };
+    candidateLists.forEach(list => {
+      if (Array.isArray(list)) {
+        list.forEach(lic => {
+          if (!lic) return;
+          const key = (lic.id || lic.licenseNumber || lic.applicantId || '').trim();
+          if (key && !combinedMap.has(key)) {
+            combinedMap.set(key, lic);
+          } else if (!key) {
+            combinedMap.set(`rec_${Math.random()}`, lic);
+          }
+        });
       }
-      return result;
+    });
+
+    let records = Array.from(combinedMap.values());
+
+    // If local memory is completely empty, attempt to hydrate from the persisted local summary snapshot
+    if (records.length === 0) {
+      const snapshot = fetchStorageItem<AlphabeticalSummaryResult | null>('plsms_alphabetical_summary_snapshot', null);
+      if (snapshot && Array.isArray(snapshot.alphabetStats) && snapshot.alphabetStats.length >= 26) {
+        cachedAlphabeticalSummary = { data: snapshot, timestamp: Date.now() };
+        return snapshot;
+      }
     }
 
-    // Check persistent Firestore summary document /dashboard_stats/alphabetical (costs 1 read)
-    if (!isDateFiltered && !forceRefresh) {
-      try {
-        const docSnap = await withFirestoreRetry(() => getDoc(doc(db, 'dashboard_stats', 'alphabetical')));
-        if (docSnap.exists()) {
-          const data = docSnap.data() as any;
-          if (data && Array.isArray(data.alphabetStats) && data.alphabetStats.length >= 26) {
-            const sumTotal = data.alphabetStats.reduce((acc: number, row: AlphabetStat) => acc + (row.count || 0), 0);
-            const sumDist = data.alphabetStats.reduce((acc: number, row: AlphabetStat) => acc + (row.distributed || 0), 0);
-            const sumRem = data.alphabetStats.reduce((acc: number, row: AlphabetStat) => acc + (row.remained || 0), 0);
+    // Apply client-side Nepali BS date range filtering if specified
+    if (isDateFiltered) {
+      const startBS = (startDateBS || '').trim();
+      const endBS = (endDateBS || '').trim();
 
-            const result: AlphabeticalSummaryResult = {
-              alphabetStats: data.alphabetStats,
-              totalCount: data.totalCount ?? sumTotal,
-              totalDistributed: data.totalDistributed ?? sumDist,
-              totalRemained: data.totalRemained ?? sumRem
-            };
-            cachedAlphabeticalSummary = { data: result, timestamp: Date.now() };
-            return result;
+      records = records.filter(lic => {
+        const rawDate = lic.distributedDate || lic.foundDate || lic.createdAt || lic.updatedAt;
+        if (!rawDate) return true;
+
+        let bsDate = '';
+        if (typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim())) {
+          bsDate = rawDate.trim();
+        } else {
+          try {
+            bsDate = convertADToBS(rawDate);
+          } catch {
+            bsDate = '';
           }
         }
-      } catch (docErr) {
-        console.warn("Persistent alphabetical summary check notice:", docErr);
-      }
+
+        if (!bsDate) return true;
+        if (startBS && bsDate < startBS) return false;
+        if (endBS && bsDate > endBS) return false;
+        return true;
+      });
     }
 
-    try {
-      const colRef = collection(db, 'licenses');
-      const kpis = await getDashboardKpiCounts(forceRefresh);
-      const totalRecords = kpis.totalRecords;
-      const totalDistributed = kpis.distributedCount;
+    const statsMap: Record<string, { count: number; distributed: number }> = {};
+    alphabets.forEach(alpha => {
+      statsMap[alpha] = { count: 0, distributed: 0 };
+    });
 
-      const statsPromises = alphabets.map(async (alpha) => {
-        const nextChar = String.fromCharCode(alpha.charCodeAt(0) + 1);
-        try {
-          const [countSnap, distSnap] = await withFirestoreRetry(() => Promise.all([
-            getCountFromServer(query(colRef, where('fullName', '>=', alpha), where('fullName', '<', nextChar))),
-            getCountFromServer(query(colRef, where('fullName', '>=', alpha), where('fullName', '<', nextChar), where('status', '==', 'distributed')))
-          ]));
-          const count = countSnap.data().count;
-          const distributed = distSnap.data().count;
-          return {
-            alphabet: alpha,
-            count,
-            distributed,
-            remained: Math.max(0, count - distributed)
-          };
-        } catch (e: any) {
-          checkAndTriggerQuotaError(e);
-          throw e;
-        }
-      });
+    let otherCount = 0;
+    let otherDistributed = 0;
+    let overallTotal = 0;
+    let overallDistributed = 0;
 
-      const alphaStats = await Promise.all(statsPromises);
-      const alphaCountSum = alphaStats.reduce((sum, r) => sum + r.count, 0);
-      const alphaDistSum = alphaStats.reduce((sum, r) => sum + r.distributed, 0);
+    records.forEach(lic => {
+      if (!lic) return;
+      overallTotal++;
+      const isDist = lic.status === 'distributed' || isLicenseDistributed(lic);
+      if (isDist) overallDistributed++;
 
-      const otherCount = Math.max(0, totalRecords - alphaCountSum);
-      const otherDist = Math.max(0, totalDistributed - alphaDistSum);
-      const otherRemained = Math.max(0, otherCount - otherDist);
+      const clean = (lic.fullName || '').replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').trim().toUpperCase();
+      const firstChar = clean.length > 0 ? clean.charAt(0) : '';
 
-      alphaStats.push({
-        alphabet: 'OTHERS / अन्य',
-        count: otherCount,
-        distributed: otherDist,
-        remained: otherRemained
-      });
-
-      const sumTotal = alphaStats.reduce((acc, row) => acc + row.count, 0);
-      const sumDist = alphaStats.reduce((acc, row) => acc + row.distributed, 0);
-      const sumRem = alphaStats.reduce((acc, row) => acc + row.remained, 0);
-
-      const result: AlphabeticalSummaryResult = {
-        alphabetStats: alphaStats,
-        totalCount: sumTotal,
-        totalDistributed: sumDist,
-        totalRemained: sumRem
-      };
-
-      // Persist to /dashboard_stats/alphabetical so subsequent loads cost only 1 document read
-      try {
-        await setDoc(doc(db, 'dashboard_stats', 'alphabetical'), {
-          ...result,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (persistErr) {
-        console.warn("Could not save persistent alphabetical summary:", persistErr);
-      }
-
-      if (!isDateFiltered) {
-        cachedAlphabeticalSummary = { data: result, timestamp: Date.now() };
-      }
-      return result;
-    } catch (err: any) {
-      checkAndTriggerQuotaError(err);
-      if (isQuotaOrMemoryError(err)) {
-        console.warn("Firestore quota limit notice during alphabetical summary; returning cached/store summary.");
+      if (firstChar >= 'A' && firstChar <= 'Z') {
+        statsMap[firstChar].count++;
+        if (isDist) statsMap[firstChar].distributed++;
       } else {
-        console.warn("Notice: Failed to load alphabetical summary from database:", err?.message || err);
+        otherCount++;
+        if (isDist) otherDistributed++;
       }
-      if (cachedAlphabeticalSummary) {
-        return cachedAlphabeticalSummary.data;
-      }
-      return calculateDemoAlphabeticalSummary();
-    } finally {
-      if (!isDateFiltered) {
-        alphabeticalSummaryPromise = null;
-      }
+    });
+
+    const stats: AlphabetStat[] = alphabets.map(alpha => ({
+      alphabet: alpha,
+      count: statsMap[alpha].count,
+      distributed: statsMap[alpha].distributed,
+      remained: Math.max(0, statsMap[alpha].count - statsMap[alpha].distributed)
+    }));
+
+    stats.push({
+      alphabet: 'OTHERS / अन्य',
+      count: otherCount,
+      distributed: otherDistributed,
+      remained: Math.max(0, otherCount - otherDistributed)
+    });
+
+    const result: AlphabeticalSummaryResult = {
+      alphabetStats: stats,
+      totalCount: overallTotal,
+      totalDistributed: overallDistributed,
+      totalRemained: Math.max(0, overallTotal - overallDistributed)
+    };
+
+    // Cache to localStorage snapshot when not date filtered so next app load is instant with 0 reads
+    if (!isDateFiltered && overallTotal > 0) {
+      writeStorageItem('plsms_alphabetical_summary_snapshot', result);
     }
+
+    if (!isDateFiltered) {
+      cachedAlphabeticalSummary = { data: result, timestamp: Date.now() };
+    }
+
+    return result;
   })();
 
   if (!isDateFiltered) {
@@ -3674,49 +3637,61 @@ export async function getLicensesByAlphabet(
   endDateBS?: string,
   providedLicenses?: License[]
 ): Promise<License[]> {
-  try {
-    const cleanAlpha = (alpha || '').toUpperCase().trim();
-    const colRef = collection(db, 'licenses');
-
-    if (cleanAlpha.startsWith('OTHER')) {
-      const snap = await withFirestoreRetry(() => getDocs(query(colRef, limit(200))));
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
-      return docs.filter(l => {
-        const name = (l.fullName || '').trim();
-        const first = name.replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').charAt(0).toUpperCase();
-        return first < 'A' || first > 'Z';
+  const cleanAlpha = (alpha || '').toUpperCase().trim();
+  
+  // 100% In-Memory / Local Storage - Zero Database Reads
+  const storeRecords = registryDataStore.getRecords();
+  const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
+  const backupRecords = fetchStorageItem<License[]>('plsms_live_licenses_backup', []);
+  
+  const combinedMap = new Map<string, License>();
+  [providedLicenses || [], storeRecords, backupRecords, storageRecords].forEach(list => {
+    if (Array.isArray(list)) {
+      list.forEach(lic => {
+        if (!lic) return;
+        const key = (lic.id || lic.licenseNumber || lic.applicantId || '').trim();
+        if (key && !combinedMap.has(key)) {
+          combinedMap.set(key, lic);
+        } else if (!key) {
+          combinedMap.set(`rec_${Math.random()}`, lic);
+        }
       });
     }
+  });
 
-    const nextChar = String.fromCharCode(cleanAlpha.charCodeAt(0) + 1);
-    const q = query(
-      colRef, 
-      where('fullName', '>=', cleanAlpha), 
-      where('fullName', '<', nextChar), 
-      limit(200)
-    );
-    const snap = await withFirestoreRetry(() => getDocs(q));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as License));
-  } catch (err: any) {
-    checkAndTriggerQuotaError(err);
-    if (isQuotaOrMemoryError(err)) {
-      console.warn(`Firestore quota limit notice while fetching licenses for letter ${alpha}; falling back to store dataset.`);
-    } else {
-      console.warn(`Failed to fetch licenses for alphabet ${alpha}:`, err?.message || err);
-    }
-    const storeRecords = registryDataStore.getRecords();
-    const storageRecords = fetchStorageItem<License[]>('plsms_mock_licenses', initialMockLicenses);
-    const list = storeRecords.length >= storageRecords.length ? storeRecords : storageRecords;
-    const cleanAlpha = (alpha || '').toUpperCase().trim();
-    return list.filter(l => {
-      const name = (l.fullName || '').trim();
-      const first = name.replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').charAt(0).toUpperCase();
-      if (cleanAlpha.startsWith('OTHER')) {
-        return first < 'A' || first > 'Z';
+  let list = Array.from(combinedMap.values());
+
+  if (startDateBS || endDateBS) {
+    const startBS = (startDateBS || '').trim();
+    const endBS = (endDateBS || '').trim();
+    list = list.filter(lic => {
+      const rawDate = lic.distributedDate || lic.foundDate || lic.createdAt || lic.updatedAt;
+      if (!rawDate) return true;
+      let bsDate = '';
+      if (typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim())) {
+        bsDate = rawDate.trim();
+      } else {
+        try {
+          bsDate = convertADToBS(rawDate);
+        } catch {
+          bsDate = '';
+        }
       }
-      return first === cleanAlpha;
+      if (!bsDate) return true;
+      if (startBS && bsDate < startBS) return false;
+      if (endBS && bsDate > endBS) return false;
+      return true;
     });
   }
+
+  return list.filter(l => {
+    const name = (l.fullName || '').trim();
+    const first = name.replace(/^[\uFEFF\u200B\u200C\u200D\s\t\r\n]+/, '').charAt(0).toUpperCase();
+    if (cleanAlpha.startsWith('OTHER')) {
+      return first < 'A' || first > 'Z';
+    }
+    return first === cleanAlpha;
+  });
 }
 
 // ==================== INTEGRATED REPORT DATA FETCH ENGINE ====================
